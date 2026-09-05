@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.streamlit/
+backtest_results/
+floor_photo/*
+!floor_photo/.gitkeep

@@ -1,0 +1,4 @@
+google-genai  # Geminiフォールバックを使わない場合は省略可
+Pillow
+python-dotenv
+streamlit
