@@ -11,6 +11,8 @@ from floor_plan import (
     build_extraction_prompt,
     load_knowledge,
     parse_structure_response,
+    validate_connections,
+    validate_scoring_json,
 )
 
 
@@ -28,6 +30,15 @@ VALID_STRUCTURE = {
     "fixtures": [],
     "negative_observations": [],
     "unreadable_items": [],
+}
+
+VALID_SCORING = {
+    "criteria": [
+        {"name": name, "proposed_score": points, "status": "confirmed", "evidence_ids": ["S1"], "reason": "根拠あり", "knowledge_basis": "参考知識"}
+        for name, points, _ in SCORE_CRITERIA
+    ],
+    "good_points": ["良い点"], "concerns": [],
+    "improvements": ["低: 確認"], "expert_checks": ["専門家確認"],
 }
 
 
@@ -78,6 +89,35 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             parse_structure_response(json.dumps(invalid))
 
+    def test_implausible_hall_balcony_connection_is_rejected(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"][0]["label"] = "玄関"
+        structure["spaces"][0]["space_type"] = "hall"
+        structure["connections"][0].update(boundary_relation="door", traversable=True)
+        checked, warnings = validate_connections(structure)
+        self.assertFalse(checked["connections"][0]["traversable"])
+        self.assertEqual(checked["connections"][0]["validation_status"], "rejected")
+        self.assertTrue(warnings)
+
+    def test_bedroom_to_toilet_connection_is_rejected(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"][0]["label"] = "洋室5帖"
+        structure["spaces"][1].update(label="トイレ", space_type="sanitary")
+        structure["connections"][0].update(boundary_relation="door", traversable=True)
+        checked, warnings = validate_connections(structure)
+        self.assertFalse(checked["connections"][0]["traversable"])
+        self.assertIn("一般居室", warnings[0])
+
+    def test_unverifiable_categories_cannot_receive_full_score(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["verified_topology"] = {"validation_warnings": [], "direct_connections": []}
+        scoring = validate_scoring_json(json.dumps(VALID_SCORING, ensure_ascii=False), structure)
+        scores = {item["name"]: item["score"] for item in scoring["criteria"]}
+        self.assertLess(scores["採光・通風"], 10)
+        self.assertLess(scores["安全性・バリアフリー"], 10)
+        self.assertLess(scores["将来対応・可変性"], 10)
+        self.assertEqual(scoring["total"], sum(scores.values()))
+
     def test_real_knowledge_is_loaded_in_full(self):
         project_dir = Path(__file__).resolve().parents[1]
         knowledge = load_knowledge(project_dir / "knowledge.md")
@@ -107,15 +147,19 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         client = FakeClient(
             json.dumps(VALID_STRUCTURE),
             json.dumps(VALID_STRUCTURE),
-            "  評価完了  ",
+            json.dumps(VALID_SCORING, ensure_ascii=False),
         )
         result = analyze_floor_plan(image, client, "参考知識", model="test-model")
 
         extracted_without_topology = {
             key: value for key, value in result.structure.items() if key != "verified_topology"
         }
+        for connection in extracted_without_topology["connections"]:
+            connection.pop("validation_status", None)
+            connection.pop("validation_reasons", None)
         self.assertEqual(extracted_without_topology, VALID_STRUCTURE)
-        self.assertEqual(result.report, "評価完了")
+        self.assertIn("# 総合評価:", result.report)
+        self.assertEqual(result.scoring["total"], sum(item["score"] for item in result.scoring["criteria"]))
         self.assertEqual(result.structure["verified_topology"]["traversable_neighbors"]["S1"], [])
         self.assertEqual(len(client.models.calls), 3)
         first, verification, scoring = client.models.calls
@@ -126,6 +170,7 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertEqual(len(scoring["contents"]), 1)
         self.assertIn('"spaces"', scoring["contents"][0])
         self.assertNotIn(image, scoring["contents"])
+        self.assertEqual(scoring["config"]["response_mime_type"], "application/json")
 
 
 if __name__ == "__main__":

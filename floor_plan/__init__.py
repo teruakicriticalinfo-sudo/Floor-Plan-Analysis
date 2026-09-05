@@ -9,6 +9,9 @@ from .analyzer import (
     build_extraction_prompt,
     load_knowledge,
     parse_structure_response,
+    render_analysis_report,
+    validate_connections,
+    validate_scoring_json,
 )
 from .providers import (
     DEFAULT_OLLAMA_HOST,
@@ -28,4 +31,13 @@ __all__ = [
     "build_extraction_prompt",
     "load_knowledge",
     "parse_structure_response",
+    "render_analysis_report",
+    "validate_connections",
+    "validate_scoring_json",
+    "DEFAULT_OLLAMA_HOST",
+    "DEFAULT_OLLAMA_MODEL",
+    "FallbackClient",
+    "GeminiClient",
+    "OllamaClient",
+    "create_analysis_client",
 ]

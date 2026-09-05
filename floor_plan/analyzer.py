@@ -37,11 +37,38 @@ STRUCTURE_JSON_SCHEMA = {
     },
 }
 
+SCORE_JSON_SCHEMA = {
+    "type": "object",
+    "required": ["criteria", "good_points", "concerns", "improvements", "expert_checks"],
+    "properties": {
+        "criteria": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "proposed_score", "status", "evidence_ids", "reason", "knowledge_basis"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "proposed_score": {"type": "integer"},
+                    "status": {"type": "string", "enum": ["confirmed", "partial", "unverifiable"]},
+                    "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                    "knowledge_basis": {"type": "string"},
+                },
+            },
+        },
+        "good_points": {"type": "array", "items": {"type": "string"}},
+        "concerns": {"type": "array", "items": {"type": "string"}},
+        "improvements": {"type": "array", "items": {"type": "string"}},
+        "expert_checks": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
 
 @dataclass(frozen=True)
 class FloorPlanAnalysis:
     draft_structure: dict[str, Any]
     structure: dict[str, Any]
+    scoring: dict[str, Any]
     report: str
 
 
@@ -149,9 +176,56 @@ def parse_structure_response(text: str) -> dict[str, Any]:
     return structure
 
 
-def add_verified_topology(structure: dict[str, Any]) -> dict[str, Any]:
-    """Create a deterministic adjacency map from traversable model observations."""
+def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Reject structurally implausible edges before they can be used for scoring."""
     enriched = deepcopy(structure)
+    spaces = {space["id"]: space for space in enriched["spaces"]}
+    warnings: list[str] = []
+    seen_pairs: set[tuple[str, str, str]] = set()
+    for connection in enriched["connections"]:
+        connection["validation_status"] = "accepted"
+        reasons: list[str] = []
+        space_a = spaces[connection["space_a"]]
+        space_b = spaces[connection["space_b"]]
+        relation = connection.get("boundary_relation")
+        traversable = connection.get("traversable") is True
+        pair_key = tuple(sorted((space_a["id"], space_b["id"]))) + (str(relation),)
+
+        if space_a["id"] == space_b["id"]:
+            reasons.append("同じ空間同士の接続")
+        if traversable and relation in {"shared_wall_only", "unknown"}:
+            reasons.append("通行不可の境界種別なのにtraversable=true")
+        if pair_key in seen_pairs:
+            reasons.append("同一境界の重複")
+        seen_pairs.add(pair_key)
+
+        types = {space_a.get("space_type"), space_b.get("space_type")}
+        labels = f"{space_a.get('label', '')} {space_b.get('label', '')}"
+        if traversable and "バルコニー" in labels and "hall" in types:
+            reasons.append("玄関・廊下とバルコニーの直結は要画像再確認")
+        if traversable and "exterior" in types and ("storage" in types or "sanitary" in types):
+            reasons.append("収納・水回りと屋外の直結は要画像再確認")
+        if traversable and types == {"storage"}:
+            reasons.append("収納同士を通行経路にしている")
+        if traversable and types == {"room", "sanitary"}:
+            room = space_a if space_a.get("space_type") == "room" else space_b
+            sanitary = space_b if room is space_a else space_a
+            room_label = str(room.get("label", "")).upper()
+            sanitary_label = str(sanitary.get("label", ""))
+            if "LDK" not in room_label and any(word in sanitary_label for word in ("トイレ", "浴室", "便所")):
+                reasons.append("一般居室とトイレ・浴室の直結は要画像再確認")
+
+        if reasons:
+            connection["validation_status"] = "rejected"
+            connection["validation_reasons"] = reasons
+            connection["traversable"] = False
+            warnings.append(f"{connection.get('id')}: {' / '.join(reasons)}")
+    return enriched, warnings
+
+
+def add_verified_topology(structure: dict[str, Any]) -> dict[str, Any]:
+    """Create adjacency only from connections accepted by deterministic validation."""
+    enriched, warnings = validate_connections(structure)
     neighbors = {space["id"]: [] for space in enriched["spaces"]}
     direct_connections = []
     for connection in enriched["connections"]:
@@ -175,6 +249,7 @@ def add_verified_topology(structure: dict[str, Any]) -> dict[str, Any]:
             for observation in enriched["negative_observations"]
             if observation.get("confidence") == "high"
         ],
+        "validation_warnings": warnings,
     }
     return enriched
 
@@ -395,7 +470,7 @@ def verify_floor_plan_structure(
 
 
 def build_analysis_prompt(knowledge: str, structure: dict[str, Any]) -> str:
-    """Stage 2 prompt: evaluate only the extracted facts."""
+    """Stage 2 prompt: request score proposals as machine-checkable JSON."""
     if not knowledge.strip():
         raise ValueError("参考知識が空です。")
 
@@ -429,26 +504,21 @@ def build_analysis_prompt(knowledge: str, structure: dict[str, Any]) -> str:
 【固定採点表・合計100点】
 {rubric_lines}
 
-【出力形式】
-# 総合評価: XX / 100点
+【出力ルール】
+- MarkdownではなくJSONだけを返す。
+- criteriaは固定採点表と同じ名称・順序で8件すべて返す。
+- proposed_scoreは配点以内の整数。ただしPython側で根拠を検証し、最終点を決定する。
+- statusは、十分な高・中confidence根拠がある場合confirmed、一部だけならpartial、判断材料がない場合unverifiable。
+- evidence_idsは実在するspace ID、connection ID、window IDだけ。validation_status=rejectedのconnection IDは禁止。
+- 確認不能を良い状態だと仮定しない。確認不能な項目はstatus=unverifiableとする。
+- good_points、concerns、improvements、expert_checksは短い文の配列。改善案は「高: ...」のように優先度を付ける。
 
-## 読み取り条件
-- 確認できた情報
-- 確認不能な情報
-- 画像の判読性: 高・中・低
-
-## 採点表
-| 評価項目 | 得点 | 配点 | 構造化結果上の根拠 | 参考にした知識 |
-|---|---:|---:|---|---|
-8項目すべてを記載し、得点合計と総合評価を一致させる。
-
-## 良い点
-## 気になる点
-## 改善案
-優先度を「高・中・低」で示す。
-## 専門家に確認すべき事項
-
-最後に、建築士による法的・構造的確認の代替ではないことを短く明記する。
+JSON形式:
+{{
+  "criteria": [{{"name": "生活動線", "proposed_score": 0, "status": "confirmed|partial|unverifiable", "evidence_ids": ["S1", "C1"], "reason": "...", "knowledge_basis": "..."}}],
+  "good_points": ["..."], "concerns": ["..."],
+  "improvements": ["高: ..."], "expert_checks": ["..."]
+}}
 
 【構造化された画像読取結果ここから】
 {structure_json}
@@ -465,15 +535,144 @@ def analyze_from_structure(
     client: Any,
     knowledge: str,
     model: str = DEFAULT_MODEL,
-) -> str:
-    """Stage 2: score the already-extracted structure without the source image."""
+) -> dict[str, Any]:
+    """Stage 2: get JSON proposals, then enforce evidence-based caps in Python."""
     response = _generate_with_retry(
         client,
         model=model,
         contents=[build_analysis_prompt(knowledge, structure)],
-        config={"temperature": 0},
+        config={"response_mime_type": "application/json", "response_json_schema": SCORE_JSON_SCHEMA, "temperature": 0},
     )
-    return _response_text(response, "分析結果")
+    return validate_scoring_json(_response_text(response, "分析結果"), structure)
+
+
+def _valid_evidence_ids(structure: dict[str, Any]) -> set[str]:
+    ids = {space["id"] for space in structure["spaces"]}
+    ids.update(window.get("id") for window in structure["windows"] if window.get("id"))
+    ids.update(
+        connection.get("id")
+        for connection in structure["connections"]
+        if connection.get("id") and connection.get("validation_status", "accepted") == "accepted"
+    )
+    return ids
+
+
+def _criterion_cap(name: str, allocation: int, structure: dict[str, Any]) -> tuple[int, str | None]:
+    """Return a deterministic evidence ceiling for each scoring category."""
+    warnings = structure.get("verified_topology", {}).get("validation_warnings", [])
+    windows = structure.get("windows", [])
+    glazed = any(
+        item.get("boundary_relation") == "glazed_door"
+        and item.get("validation_status", "accepted") == "accepted"
+        for item in structure.get("connections", [])
+    )
+    spaces = structure.get("spaces", [])
+    fixtures = structure.get("fixtures", [])
+
+    if name == "採光・通風" and not windows and not glazed:
+        return allocation // 2, "窓・ガラス戸の確認根拠がないため中立点以下"
+    if name == "家具配置・居住性" and not any(item.get("area_text") or item.get("bbox") for item in spaces):
+        return allocation // 2, "面積・形状の根拠がないため中立点以下"
+    if name == "収納" and not any(item.get("space_type") == "storage" for item in spaces):
+        return allocation // 2, "収納の確認根拠がないため中立点以下"
+    if name == "家事効率" and not fixtures:
+        return allocation // 2, "設備の確認根拠がないため中立点以下"
+    if name == "安全性・バリアフリー":
+        return min(allocation, round(allocation * 0.7)), "段差・扉干渉・避難条件を画像だけで完全確認できない"
+    if name == "将来対応・可変性":
+        return allocation // 2, "構造・家族条件・可変壁の情報がないため中立点以下"
+    if warnings and name in {"生活動線", "ゾーニング・プライバシー", "家事効率"}:
+        return round(allocation * 0.6), "不自然な接続が検出されたため上限を制限"
+    return allocation, None
+
+
+def validate_scoring_json(text: str, structure: dict[str, Any]) -> dict[str, Any]:
+    """Parse model proposals and deterministically reject unsupported/full scores."""
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"採点結果をJSONとして解釈できません: {exc}") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("criteria"), list):
+        raise RuntimeError("採点JSONにcriteria配列がありません。")
+
+    proposed = {item.get("name"): item for item in raw["criteria"] if isinstance(item, dict)}
+    valid_ids = _valid_evidence_ids(structure)
+    results = []
+    adjustments = []
+    status_ratios = {"confirmed": 1.0, "partial": 0.7, "unverifiable": 0.5}
+    for name, allocation, _ in SCORE_CRITERIA:
+        item = proposed.get(name, {})
+        status = item.get("status") if item.get("status") in status_ratios else "unverifiable"
+        evidence_ids = [value for value in item.get("evidence_ids", []) if value in valid_ids]
+        invalid_ids = [value for value in item.get("evidence_ids", []) if value not in valid_ids]
+        if not evidence_ids:
+            status = "unverifiable"
+        proposed_score = item.get("proposed_score", 0)
+        if not isinstance(proposed_score, int):
+            proposed_score = 0
+        proposed_score = max(0, min(proposed_score, allocation))
+        status_cap = round(allocation * status_ratios[status])
+        evidence_cap, cap_reason = _criterion_cap(name, allocation, structure)
+        final_score = min(proposed_score, status_cap, evidence_cap)
+        reasons = []
+        if invalid_ids:
+            reasons.append(f"無効な根拠IDを除外: {', '.join(map(str, invalid_ids))}")
+        if not evidence_ids:
+            reasons.append("有効な根拠IDがないため確認不能扱い")
+        if cap_reason and final_score < proposed_score:
+            reasons.append(cap_reason)
+        if final_score != proposed_score:
+            adjustments.append(f"{name}: {proposed_score}→{final_score}（{' / '.join(reasons) or '確認状態による上限'}）")
+        results.append({
+            "name": name, "score": final_score, "allocation": allocation,
+            "status": status, "evidence_ids": evidence_ids,
+            "reason": str(item.get("reason", "確認不能")),
+            "knowledge_basis": str(item.get("knowledge_basis", "該当根拠なし")),
+        })
+
+    return {
+        "criteria": results,
+        "total": sum(item["score"] for item in results),
+        "good_points": raw.get("good_points", []),
+        "concerns": raw.get("concerns", []),
+        "improvements": raw.get("improvements", []),
+        "expert_checks": raw.get("expert_checks", []),
+        "validation_adjustments": adjustments,
+    }
+
+
+def render_analysis_report(scoring: dict[str, Any], structure: dict[str, Any]) -> str:
+    """Render final Markdown deterministically; the model never controls totals or table shape."""
+    quality = structure.get("image_quality", {}).get("level", "unknown")
+    quality_label = {"high": "高", "medium": "中", "low": "低"}.get(quality, "不明")
+    warnings = structure.get("verified_topology", {}).get("validation_warnings", [])
+
+    lines = [
+        f"# 総合評価: {scoring['total']} / 100点", "", "## 読み取り条件",
+        f"- 画像の判読性: {quality_label}",
+        f"- 登録空間数: {len(structure.get('spaces', []))}",
+        f"- 採用した通行可能接続: {len(structure.get('verified_topology', {}).get('direct_connections', []))}",
+        "", "## 採点表", "",
+        "| 評価項目 | 得点 | 配点 | 確認状態 | 有効な根拠ID | 判定理由 | 参考知識 |",
+        "|---|---:|---:|---|---|---|---|",
+    ]
+    for item in scoring["criteria"]:
+        cells = [item["name"], str(item["score"]), str(item["allocation"]), item["status"], ", ".join(item["evidence_ids"]) or "なし", item["reason"], item["knowledge_basis"]]
+        lines.append("| " + " | ".join(str(cell).replace("|", "／").replace("\n", " ") for cell in cells) + " |")
+
+    def add_section(title: str, values: list[Any], empty: str) -> None:
+        lines.extend(["", f"## {title}"])
+        cleaned = [str(value).strip() for value in values if str(value).strip()]
+        lines.extend(f"- {value}" for value in cleaned or [empty])
+
+    add_section("接続検証警告", warnings, "機械検出なし")
+    add_section("採点の自動補正", scoring["validation_adjustments"], "補正なし")
+    add_section("良い点", scoring["good_points"], "確認できる根拠なし")
+    add_section("気になる点", scoring["concerns"], "確認できる根拠なし")
+    add_section("改善案", scoring["improvements"], "追加確認後に検討")
+    add_section("専門家に確認すべき事項", scoring["expert_checks"], "法令・構造・現地条件")
+    lines.extend(["", "本評価は画像から確認できた範囲の参考情報であり、建築士による法的・構造的確認の代替ではありません。"])
+    return "\n".join(lines)
 
 
 def analyze_floor_plan(
@@ -485,5 +684,6 @@ def analyze_floor_plan(
     """Run topology extraction first, then evaluate the extracted JSON."""
     draft = extract_floor_plan_structure(image, client, model)
     structure = verify_floor_plan_structure(image, draft, client, model)
-    report = analyze_from_structure(structure, client, knowledge, model)
-    return FloorPlanAnalysis(draft_structure=draft, structure=structure, report=report)
+    scoring = analyze_from_structure(structure, client, knowledge, model)
+    report = render_analysis_report(scoring, structure)
+    return FloorPlanAnalysis(draft_structure=draft, structure=structure, scoring=scoring, report=report)

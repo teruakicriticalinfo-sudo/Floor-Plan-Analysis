@@ -110,6 +110,9 @@ def main() -> int:
                 f"## 第1段階：再照合後の読取結果\n\n"
                 f"```json\n{json.dumps(result.structure, ensure_ascii=False, indent=2)}\n```\n\n"
                 f"## 第2段階：採点結果\n\n"
+                f"### 検証済み採点JSON\n\n"
+                f"```json\n{json.dumps(result.scoring, ensure_ascii=False, indent=2)}\n```\n\n"
+                f"### 確定レポート\n\n"
                 f"{result.report}\n\n"
                 f"## 自動形式チェック\n\n{check_text}\n"
             )

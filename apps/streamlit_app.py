@@ -111,5 +111,7 @@ if uploaded_file is not None:
                         st.json(result.draft_structure)
                     with st.expander("第1段階：再照合後の読取結果", expanded=True):
                         st.json(result.structure)
+                    with st.expander("第2段階：検証済み採点JSON", expanded=True):
+                        st.json(result.scoring)
                     with st.container(border=True):
                         st.markdown(result.report)
