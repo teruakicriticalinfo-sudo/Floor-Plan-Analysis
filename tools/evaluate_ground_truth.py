@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
@@ -10,9 +11,24 @@ def canonical(label: str, aliases: dict[str, str]) -> str:
     for source, target in aliases.items():
         if source in text:
             return target
-    if "バルコニー" in text:
-        return "バルコニー"
     return text
+
+
+def canonical_space(space: dict, aliases: dict[str, str]) -> str:
+    label = str(space.get("label", ""))
+    area = str(space.get("area_text") or "")
+    evidence = str(space.get("evidence") or "")
+    combined = f"{label} {area} {evidence}"
+    if "洋室" in label:
+        if "4.85" in combined:
+            return "洋室4.85帖"
+        if "5.1" in combined:
+            return "洋室5.1帖"
+    if "バルコニー" in label:
+        bbox = space.get("bbox") or []
+        if len(bbox) == 4:
+            return "バルコニー上" if (bbox[1] + bbox[3]) / 2 < 0.5 else "バルコニー下"
+    return canonical(label, aliases)
 
 
 def edge(first: str, second: str) -> tuple[str, str]:
@@ -34,16 +50,18 @@ def evaluate(structure: dict, truth: dict) -> dict:
             or second.get("space_type") in ignored_types
         ):
             continue
-        predicted.add(edge(canonical(first["label"], aliases), canonical(second["label"], aliases)))
+        first_label = canonical_space(first, aliases)
+        second_label = canonical_space(second, aliases)
+        if first_label == second_label:
+            continue
+        predicted.add(edge(first_label, second_label))
 
     expected = {edge(canonical(a, aliases), canonical(b, aliases)) for a, b in truth["connections"]}
-    # Balcony position is not currently retained in normalized labels, so either balcony is a partial match.
-    expected_collapsed = {edge(a.replace("バルコニー上", "バルコニー").replace("バルコニー下", "バルコニー"), b.replace("バルコニー上", "バルコニー").replace("バルコニー下", "バルコニー")) for a, b in expected}
-    true_positive = predicted & expected_collapsed
-    false_positive = predicted - expected_collapsed
-    false_negative = expected_collapsed - predicted
+    true_positive = predicted & expected
+    false_positive = predicted - expected
+    false_negative = expected - predicted
     precision = len(true_positive) / len(predicted) if predicted else 0.0
-    recall = len(true_positive) / len(expected_collapsed) if expected_collapsed else 0.0
+    recall = len(true_positive) / len(expected) if expected else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
     return {
         "precision": round(precision, 3), "recall": round(recall, 3), "f1": round(f1, 3),
@@ -54,6 +72,8 @@ def evaluate(structure: dict, truth: dict) -> dict:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("structure", type=Path)
     parser.add_argument("ground_truth", type=Path)

@@ -38,6 +38,25 @@ STRUCTURE_JSON_SCHEMA = {
     },
 }
 
+SPACE_INVENTORY_SCHEMA = {
+    "type": "object",
+    "required": ["image_quality", "orientation", "spaces"],
+    "properties": {
+        "image_quality": STRUCTURE_JSON_SCHEMA["properties"]["image_quality"],
+        "orientation": STRUCTURE_JSON_SCHEMA["properties"]["orientation"],
+        "spaces": STRUCTURE_JSON_SCHEMA["properties"]["spaces"],
+    },
+}
+
+TOPOLOGY_OBSERVATION_SCHEMA = {
+    "type": "object",
+    "required": ["openings", "connections", "windows", "fixtures", "negative_observations", "unreadable_items"],
+    "properties": {
+        key: STRUCTURE_JSON_SCHEMA["properties"][key]
+        for key in ("openings", "connections", "windows", "fixtures", "negative_observations", "unreadable_items")
+    },
+}
+
 SCORE_JSON_SCHEMA = {
     "type": "object",
     "required": ["criteria", "good_points", "concerns", "improvements", "expert_checks"],
@@ -158,6 +177,51 @@ JSON以外の説明文やMarkdownコードフェンスは出力しない。
 """.strip()
 
 
+def build_space_inventory_prompt() -> str:
+    """Read and locate spaces without attempting any door association."""
+    return """
+間取り画像から空間だけを列挙してください。扉・接続・評価は扱いません。
+画像左上を[0,0]、右下を[1,1]として、各空間のbboxを必ず記録してください。
+
+重要:
+- 玄関ラベル周辺だけでなく、玄関からLDKまで続く廊下・ホール全体を1つのhallとしてbboxに含める。
+- 浴室、洗面所・脱衣所、トイレを別々のsanitary空間として確認する。
+- キッチンがLDK内の設備なら独立roomにしない。
+- 上下など離れたバルコニーは別々のexterior空間にする。
+- CL、押入などの収納も個別のstorage空間にする。
+- 読めない空間を推測で作らない。bboxは文字だけでなく壁で囲まれた領域全体を示す。
+
+JSON形式:
+{"image_quality":{"level":"high|medium|low","notes":[]},"orientation":{"value":null,"confidence":"high|medium|low","evidence":"..."},"spaces":[{"id":"S1","label":"LDK","space_type":"room|hall|storage|sanitary|exterior|other","area_text":"14.5帖|null","bbox":[0,0,1,1],"confidence":"high|medium|low","evidence":"..."}]}
+JSON以外は返さない。
+""".strip()
+
+
+def build_topology_prompt(inventory: dict[str, Any]) -> str:
+    """Detect openings first, then associate only the fixed inventory IDs."""
+    return f"""
+間取り画像と確定済みの空間一覧を使い、扉・開口を先に検出してから接続先を割り当ててください。
+空間の追加・削除・ID変更は禁止です。
+
+手順:
+1. 扉の円弧、引戸線、壁の切れ目、掃き出し窓をopeningsへ重複なく登録する。
+2. 各opening.positionの両側にあるspace IDを、bboxだけでなく壁の形状も見て決める。
+3. 対応できるopeningだけconnectionsへ登録する。不明なら接続を推測せずunreadable_itemsへ記録する。
+4. 窓、設備、明確な不存在も記録する。
+
+注意:
+- 中央の廊下・ホールから左右の居室や水回りへ開く扉を、居室同士の直結と誤認しない。
+- 浴室の入口は通常、隣接する洗面所・脱衣所側を重点確認する。
+- キッチン設備はLDK内ならfixtureであり、独立したconnectionを作らない。
+- opening_idは1つのconnectionにだけ使う。
+
+【確定済み空間一覧】
+{json.dumps(inventory["spaces"], ensure_ascii=False, separators=(',', ':'))}
+
+openings, connections, windows, fixtures, negative_observations, unreadable_itemsを含むJSONだけを返す。
+""".strip()
+
+
 def parse_structure_response(text: str) -> dict[str, Any]:
     """Parse and minimally validate the extraction model's JSON."""
     if not text or not text.strip():
@@ -195,7 +259,7 @@ def parse_structure_response(text: str) -> dict[str, Any]:
 
     for space in structure["spaces"]:
         bbox = space.get("bbox")
-        if not _valid_normalized_coordinates(bbox, 4) or bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
+        if not _valid_normalized_coordinates(bbox, 4) or bbox[0] > bbox[2] or bbox[1] > bbox[3]:
             raise RuntimeError(f"空間{space.get('id')}のbboxが不正です。")
 
     opening_ids = [item.get("id") for item in structure["openings"] if isinstance(item, dict)]
@@ -290,6 +354,10 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
             sanitary_label = str(sanitary.get("label", ""))
             if "LDK" not in room_label and any(word in sanitary_label for word in ("トイレ", "浴室", "便所")):
                 reasons.append("一般居室とトイレ・浴室の直結は要画像再確認")
+        if traversable and types == {"hall", "sanitary"}:
+            sanitary = space_a if space_a.get("space_type") == "sanitary" else space_b
+            if "浴室" in str(sanitary.get("label", "")):
+                reasons.append("浴室と廊下の直結は洗面所・脱衣所側を要再確認")
 
         if reasons:
             if prior_status == "accepted":
@@ -537,16 +605,42 @@ def _parse_or_repair_structure(
 
 
 def extract_floor_plan_structure(image: Any, client: Any, model: str = DEFAULT_MODEL) -> dict[str, Any]:
-    """Stage 1: extract observable topology without judging it."""
-    response = _generate_with_retry(
+    """Stage 1: inventory spaces, then detect openings and associate topology."""
+    inventory_response = _generate_with_retry(
         client,
         model=model,
-        contents=build_visual_contents(build_extraction_prompt(), image),
-        config={"response_mime_type": "application/json", "response_json_schema": STRUCTURE_JSON_SCHEMA, "temperature": 0},
+        contents=build_visual_contents(build_space_inventory_prompt(), image),
+        config={"response_mime_type": "application/json", "response_json_schema": SPACE_INVENTORY_SCHEMA, "temperature": 0},
     )
-    return _parse_or_repair_structure(
-        _response_text(response, "構造化結果"), client, model, "構造化結果"
+    inventory = _parse_json_object(_response_text(inventory_response, "空間一覧"), "空間一覧")
+    provisional = {
+        "image_quality": inventory.get("image_quality"),
+        "orientation": inventory.get("orientation"),
+        "spaces": inventory.get("spaces"),
+        "openings": [], "connections": [], "windows": [], "fixtures": [],
+        "negative_observations": [], "unreadable_items": [],
+    }
+    parse_structure_response(json.dumps(provisional, ensure_ascii=False))
+
+    topology_response = _generate_with_retry(
+        client,
+        model=model,
+        contents=build_visual_contents(build_topology_prompt(inventory), image),
+        config={"response_mime_type": "application/json", "response_json_schema": TOPOLOGY_OBSERVATION_SCHEMA, "temperature": 0},
     )
+    topology = _parse_json_object(_response_text(topology_response, "扉・接続結果"), "扉・接続結果")
+    combined = {**inventory, **topology}
+    return parse_structure_response(json.dumps(combined, ensure_ascii=False))
+
+
+def _parse_json_object(text: str, stage: str) -> dict[str, Any]:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{stage}をJSONとして解釈できません: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{stage}がJSONオブジェクトではありません。")
+    return value
 
 
 def verify_floor_plan_structure(

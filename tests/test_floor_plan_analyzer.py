@@ -112,6 +112,15 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertFalse(checked["connections"][0]["traversable"])
         self.assertIn("一般居室", warnings[0])
 
+    def test_bathroom_to_hall_connection_is_rejected(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"][0].update(label="廊下", space_type="hall")
+        structure["spaces"][1].update(label="浴室", space_type="sanitary")
+        structure["connections"][0].update(boundary_relation="door", traversable=True)
+        checked, warnings = validate_connections(structure)
+        self.assertFalse(checked["connections"][0]["traversable"])
+        self.assertTrue(any("洗面所・脱衣所" in warning for warning in warnings))
+
     def test_opening_outside_both_spaces_is_rejected(self):
         structure = json.loads(json.dumps(VALID_STRUCTURE))
         structure["connections"][0].update(boundary_relation="door", traversable=True, position=[0.05, 0.05])
@@ -164,8 +173,14 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
 
     def test_two_stage_analysis_uses_image_only_in_extraction(self):
         image = object()
+        inventory = {key: VALID_STRUCTURE[key] for key in ("image_quality", "orientation", "spaces")}
+        topology = {
+            key: VALID_STRUCTURE[key]
+            for key in ("openings", "connections", "windows", "fixtures", "negative_observations", "unreadable_items")
+        }
         client = FakeClient(
-            json.dumps(VALID_STRUCTURE),
+            json.dumps(inventory),
+            json.dumps(topology),
             json.dumps({"decisions": [{"connection_id": "C1", "verdict": "accept", "confidence": "high", "reason": "壁のみ"}]}),
             json.dumps(VALID_SCORING, ensure_ascii=False),
         )
@@ -184,10 +199,12 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertIn("# 総合評価:", result.report)
         self.assertEqual(result.scoring["total"], sum(item["score"] for item in result.scoring["criteria"]))
         self.assertEqual(result.structure["verified_topology"]["traversable_neighbors"]["S1"], [])
-        self.assertEqual(len(client.models.calls), 3)
-        first, verification, scoring = client.models.calls
+        self.assertEqual(len(client.models.calls), 4)
+        first, topology_call, verification, scoring = client.models.calls
         self.assertIn(image, first["contents"])
         self.assertEqual(first["config"]["response_mime_type"], "application/json")
+        self.assertIn(image, topology_call["contents"])
+        self.assertIn("確定済み空間一覧", topology_call["contents"][0])
         self.assertIn(image, verification["contents"])
         self.assertIn("暫定JSON", verification["contents"][0])
         self.assertEqual(verification["config"]["response_json_schema"]["properties"]["decisions"]["type"], "array")
