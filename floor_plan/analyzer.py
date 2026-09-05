@@ -64,6 +64,26 @@ SCORE_JSON_SCHEMA = {
     },
 }
 
+VERIFICATION_JSON_SCHEMA = {
+    "type": "object",
+    "required": ["decisions"],
+    "properties": {
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["connection_id", "verdict", "confidence", "reason"],
+                "properties": {
+                    "connection_id": {"type": "string"},
+                    "verdict": {"type": "string", "enum": ["accept", "reject", "uncertain"]},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "reason": {"type": "string"},
+                },
+            },
+        }
+    },
+}
+
 
 @dataclass(frozen=True)
 class FloorPlanAnalysis:
@@ -219,8 +239,11 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
     seen_pairs: set[tuple[str, str, str]] = set()
     used_openings: set[str] = set()
     for connection in enriched["connections"]:
-        connection["validation_status"] = "accepted"
-        reasons: list[str] = []
+        prior_status = connection.get("validation_status", "accepted")
+        connection["validation_status"] = prior_status
+        reasons: list[str] = list(connection.get("validation_reasons", []))
+        if prior_status in {"reject", "rejected", "uncertain"}:
+            connection["traversable"] = False
         space_a = spaces[connection["space_a"]]
         space_b = spaces[connection["space_b"]]
         relation = connection.get("boundary_relation")
@@ -269,7 +292,8 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
                 reasons.append("一般居室とトイレ・浴室の直結は要画像再確認")
 
         if reasons:
-            connection["validation_status"] = "rejected"
+            if prior_status == "accepted":
+                connection["validation_status"] = "rejected"
             connection["validation_reasons"] = reasons
             connection["traversable"] = False
             warnings.append(f"{connection.get('id')}: {' / '.join(reasons)}")
@@ -424,11 +448,12 @@ def build_visual_contents(prompt: str, image: Any) -> list[Any]:
 
 
 def build_verification_prompt(draft: dict[str, Any]) -> str:
-    """Ask a fresh visual pass to correct the draft topology before scoring."""
+    """Ask a fresh visual pass for verdicts; never regenerate the whole structure."""
     anomalies = find_topology_anomalies(draft)
     anomaly_text = "\n".join(f"- {item}" for item in anomalies) or "- 自動検出なし"
     return f"""
-間取り画像と、別の読取処理が作った【暫定JSON】を照合し、誤った空間接続を修正してください。評価や改善提案は行わず、修正後の完全なJSONだけを返してください。
+間取り画像と【暫定JSON】を照合し、connectionsの各項目だけを個別判定してください。
+空間・扉・窓・設備を再生成してはいけません。評価や改善提案も行いません。
 
 重点確認:
 - spacesのbbox、openingsのposition、connectionsのpositionを元画像と再照合する。
@@ -442,7 +467,10 @@ def build_verification_prompt(draft: dict[str, Any]) -> str:
 - 掃き出し窓は、通行可能ならglazed_doorとしてconnectionsに、採光可能ならwindowsにも記録する。
 - 明確な不存在だけnegative_observationsへ残す。単に検出できなかった項目は削除し、unreadable_itemsへ移す。
 - confidenceは再照合後の確信度に修正する。不鮮明ならlowにする。
-- 元のJSONと同じ必須キーをすべて含め、verified_topologyは含めない。
+- 暫定JSONに存在するconnection IDをそれぞれ1回ずつ判定する。
+- acceptは扉記号と両側空間を明瞭に確認できる場合だけ。
+- rejectは接続先が明らかに違う場合。判別できなければuncertainにする。
+- JSONは {{"decisions": [{{"connection_id":"C1","verdict":"accept|reject|uncertain","confidence":"high|medium|low","reason":"20文字以内"}}]}} の形だけを返す。
 
 【コードが検出した要再確認事項】
 {anomaly_text}
@@ -527,17 +555,47 @@ def verify_floor_plan_structure(
     client: Any,
     model: str = DEFAULT_MODEL,
 ) -> dict[str, Any]:
-    """Stage 1 verification: re-check suspicious and all traversable edges."""
+    """Stage 1 verification: merge edge verdicts into the preserved draft."""
     response = _generate_with_retry(
         client,
         model=model,
         contents=build_visual_contents(build_verification_prompt(draft), image),
-        config={"response_mime_type": "application/json", "response_json_schema": STRUCTURE_JSON_SCHEMA, "temperature": 0},
+        config={"response_mime_type": "application/json", "response_json_schema": VERIFICATION_JSON_SCHEMA, "temperature": 0},
     )
-    verified = _parse_or_repair_structure(
-        _response_text(response, "再照合結果"), client, model, "再照合結果"
+    return merge_verification_decisions(
+        draft, _response_text(response, "再照合結果")
     )
-    return add_verified_topology(verified)
+
+
+def merge_verification_decisions(draft: dict[str, Any], text: str) -> dict[str, Any]:
+    """Preserve observations and apply only per-connection verification verdicts."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"再照合結果をJSONとして解釈できません: {exc}") from exc
+    decisions = payload.get("decisions") if isinstance(payload, dict) else None
+    if not isinstance(decisions, list):
+        raise RuntimeError("再照合結果にdecisions配列がありません。")
+
+    decision_map = {
+        item.get("connection_id"): item
+        for item in decisions
+        if isinstance(item, dict) and item.get("connection_id")
+    }
+    merged = deepcopy(draft)
+    for connection in merged["connections"]:
+        decision = decision_map.get(connection["id"])
+        verdict = decision.get("verdict") if decision else "uncertain"
+        if verdict not in {"accept", "reject", "uncertain"}:
+            verdict = "uncertain"
+        connection["verification_verdict"] = verdict
+        connection["verification_confidence"] = decision.get("confidence", "low") if decision else "low"
+        connection["verification_reason"] = decision.get("reason", "再照合の回答なし") if decision else "再照合の回答なし"
+        if verdict != "accept":
+            connection["traversable"] = False
+            connection["validation_status"] = verdict
+            connection["validation_reasons"] = [connection["verification_reason"]]
+    return add_verified_topology(merged)
 
 
 def build_analysis_prompt(knowledge: str, structure: dict[str, Any]) -> str:
@@ -614,7 +672,26 @@ def analyze_from_structure(
         contents=[build_analysis_prompt(knowledge, structure)],
         config={"response_mime_type": "application/json", "response_json_schema": SCORE_JSON_SCHEMA, "temperature": 0},
     )
-    return validate_scoring_json(_response_text(response, "分析結果"), structure)
+    score_text = _response_text(response, "分析結果")
+    try:
+        return validate_scoring_json(score_text, structure)
+    except RuntimeError as original_error:
+        repair_response = _generate_with_retry(
+            client,
+            model=model,
+            contents=[
+                "次の壊れた採点JSONを、内容を推測で追加せずJSON構文だけ修復してください。"
+                "不足したcriteriaはstatus=unverifiable、proposed_score=0、evidence_ids=[]で補い、固定8項目を返してください。\n\n"
+                + score_text
+            ],
+            config={"response_mime_type": "application/json", "response_json_schema": SCORE_JSON_SCHEMA, "temperature": 0},
+        )
+        try:
+            return validate_scoring_json(_response_text(repair_response, "採点JSON修復結果"), structure)
+        except RuntimeError as repair_error:
+            raise RuntimeError(
+                f"採点JSONの自動修復に失敗しました。元のエラー: {original_error}; 修復後: {repair_error}"
+            ) from repair_error
 
 
 def _valid_evidence_ids(structure: dict[str, Any]) -> set[str]:

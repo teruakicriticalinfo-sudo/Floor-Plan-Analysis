@@ -23,6 +23,10 @@ APP_DIR = Path(__file__).resolve().parent
 SUPPORTED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
+def safe_model_name(model: str) -> str:
+    return re.sub(r"[^0-9A-Za-z._-]+", "_", model).strip("_") or "model"
+
+
 def check_response(response: str) -> list[str]:
     """Return basic structural problems found in a model response."""
     problems = []
@@ -116,9 +120,10 @@ def main() -> int:
                 f"{result.report}\n\n"
                 f"## 自動形式チェック\n\n{check_text}\n"
             )
-            result_path = result_dir / f"{image_path.stem}.md"
+            result_stem = f"{image_path.stem}__{safe_model_name(model)}"
+            result_path = result_dir / f"{result_stem}.md"
             result_path.write_text(report, encoding="utf-8")
-            structure_path = result_dir / f"{image_path.stem}.structure.json"
+            structure_path = result_dir / f"{result_stem}.structure.json"
             structure_path.write_text(
                 json.dumps(result.structure, ensure_ascii=False, indent=2), encoding="utf-8"
             )

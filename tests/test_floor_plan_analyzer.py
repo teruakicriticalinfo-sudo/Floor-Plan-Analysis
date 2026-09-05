@@ -10,6 +10,7 @@ from floor_plan import (
     build_analysis_prompt,
     build_extraction_prompt,
     load_knowledge,
+    merge_verification_decisions,
     parse_structure_response,
     validate_connections,
     validate_scoring_json,
@@ -119,6 +120,14 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertFalse(checked["connections"][0]["traversable"])
         self.assertTrue(any("境界付近にない" in warning for warning in warnings))
 
+    def test_missing_verification_decision_preserves_structure_and_marks_uncertain(self):
+        merged = merge_verification_decisions(VALID_STRUCTURE, '{"decisions": []}')
+        self.assertEqual(merged["spaces"], VALID_STRUCTURE["spaces"])
+        self.assertEqual(merged["openings"], VALID_STRUCTURE["openings"])
+        connection = merged["connections"][0]
+        self.assertEqual(connection["verification_verdict"], "uncertain")
+        self.assertEqual(connection["validation_status"], "uncertain")
+
     def test_unverifiable_categories_cannot_receive_full_score(self):
         structure = json.loads(json.dumps(VALID_STRUCTURE))
         structure["verified_topology"] = {"validation_warnings": [], "direct_connections": []}
@@ -157,7 +166,7 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         image = object()
         client = FakeClient(
             json.dumps(VALID_STRUCTURE),
-            json.dumps(VALID_STRUCTURE),
+            json.dumps({"decisions": [{"connection_id": "C1", "verdict": "accept", "confidence": "high", "reason": "壁のみ"}]}),
             json.dumps(VALID_SCORING, ensure_ascii=False),
         )
         result = analyze_floor_plan(image, client, "参考知識", model="test-model")
@@ -168,6 +177,9 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         for connection in extracted_without_topology["connections"]:
             connection.pop("validation_status", None)
             connection.pop("validation_reasons", None)
+            connection.pop("verification_verdict", None)
+            connection.pop("verification_confidence", None)
+            connection.pop("verification_reason", None)
         self.assertEqual(extracted_without_topology, VALID_STRUCTURE)
         self.assertIn("# 総合評価:", result.report)
         self.assertEqual(result.scoring["total"], sum(item["score"] for item in result.scoring["criteria"]))
@@ -178,6 +190,7 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertEqual(first["config"]["response_mime_type"], "application/json")
         self.assertIn(image, verification["contents"])
         self.assertIn("暫定JSON", verification["contents"][0])
+        self.assertEqual(verification["config"]["response_json_schema"]["properties"]["decisions"]["type"], "array")
         self.assertEqual(len(scoring["contents"]), 1)
         self.assertIn('"spaces"', scoring["contents"][0])
         self.assertNotIn(image, scoring["contents"])
