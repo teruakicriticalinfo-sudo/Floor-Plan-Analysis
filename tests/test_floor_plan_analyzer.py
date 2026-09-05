@@ -20,11 +20,14 @@ VALID_STRUCTURE = {
     "image_quality": {"level": "high", "notes": []},
     "orientation": {"value": None, "confidence": "low", "evidence": "方位記号なし"},
     "spaces": [
-        {"id": "S1", "label": "LDK", "space_type": "room", "area_text": "11帖", "confidence": "high", "evidence": "表記"},
-        {"id": "S2", "label": "バルコニー", "space_type": "exterior", "area_text": None, "confidence": "high", "evidence": "表記"},
+        {"id": "S1", "label": "LDK", "space_type": "room", "area_text": "11帖", "bbox": [0.0, 0.0, 0.6, 1.0], "confidence": "high", "evidence": "表記"},
+        {"id": "S2", "label": "バルコニー", "space_type": "exterior", "area_text": None, "bbox": [0.6, 0.0, 1.0, 1.0], "confidence": "high", "evidence": "表記"},
+    ],
+    "openings": [
+        {"id": "O1", "opening_type": "unknown", "position": [0.6, 0.5], "confidence": "high", "evidence": "境界"}
     ],
     "connections": [
-        {"id": "C1", "space_a": "S1", "space_b": "S2", "boundary_relation": "shared_wall_only", "traversable": False, "confidence": "high", "evidence": "壁"}
+        {"id": "C1", "opening_id": "O1", "space_a": "S1", "space_b": "S2", "boundary_relation": "shared_wall_only", "traversable": False, "position": [0.6, 0.5], "confidence": "high", "evidence": "壁"}
     ],
     "windows": [],
     "fixtures": [],
@@ -107,6 +110,14 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         checked, warnings = validate_connections(structure)
         self.assertFalse(checked["connections"][0]["traversable"])
         self.assertIn("一般居室", warnings[0])
+
+    def test_opening_outside_both_spaces_is_rejected(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["connections"][0].update(boundary_relation="door", traversable=True, position=[0.05, 0.05])
+        structure["openings"][0]["position"] = [0.05, 0.05]
+        checked, warnings = validate_connections(structure)
+        self.assertFalse(checked["connections"][0]["traversable"])
+        self.assertTrue(any("境界付近にない" in warning for warning in warnings))
 
     def test_unverifiable_categories_cannot_receive_full_score(self):
         structure = json.loads(json.dumps(VALID_STRUCTURE))

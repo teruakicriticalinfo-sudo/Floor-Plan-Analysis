@@ -24,12 +24,13 @@ SCORE_CRITERIA = (
 
 STRUCTURE_JSON_SCHEMA = {
     "type": "object",
-    "required": ["image_quality", "orientation", "spaces", "connections", "windows", "fixtures", "negative_observations", "unreadable_items"],
+    "required": ["image_quality", "orientation", "spaces", "openings", "connections", "windows", "fixtures", "negative_observations", "unreadable_items"],
     "properties": {
         "image_quality": {"type": "object"},
         "orientation": {"type": "object"},
-        "spaces": {"type": "array", "items": {"type": "object", "required": ["id", "label", "space_type", "confidence"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "space_type": {"type": "string"}, "area_text": {"type": ["string", "null"]}, "bbox": {"type": "array"}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
-        "connections": {"type": "array", "items": {"type": "object", "required": ["id", "space_a", "space_b", "boundary_relation", "traversable", "confidence"], "properties": {"id": {"type": "string"}, "space_a": {"type": "string"}, "space_b": {"type": "string"}, "boundary_relation": {"type": "string"}, "traversable": {"type": "boolean"}, "position": {"type": "array"}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
+        "spaces": {"type": "array", "items": {"type": "object", "required": ["id", "label", "space_type", "bbox", "confidence"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "space_type": {"type": "string"}, "area_text": {"type": ["string", "null"]}, "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
+        "openings": {"type": "array", "items": {"type": "object", "required": ["id", "opening_type", "position", "confidence"], "properties": {"id": {"type": "string"}, "opening_type": {"type": "string"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
+        "connections": {"type": "array", "items": {"type": "object", "required": ["id", "opening_id", "space_a", "space_b", "boundary_relation", "traversable", "position", "confidence"], "properties": {"id": {"type": "string"}, "opening_id": {"type": "string"}, "space_a": {"type": "string"}, "space_b": {"type": "string"}, "boundary_relation": {"type": "string"}, "traversable": {"type": "boolean"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "windows": {"type": "array", "items": {"type": "object"}},
         "fixtures": {"type": "array", "items": {"type": "object"}},
         "negative_observations": {"type": "array", "items": {"type": "object"}},
@@ -90,6 +91,9 @@ def build_extraction_prompt() -> str:
 簡潔に記録し、同じ空間・境界・窓を重複登録しないでください。evidenceは20文字以内とし、画像に存在する数を超えて項目を繰り返さないでください。
 
 重要な区別:
+- 最初にspacesを矩形bboxで登録し、次に画像上で実際に見える扉・開口をopeningsへ登録する。その後だけconnectionsを作る。
+- bboxとpositionは画像左上を[0,0]、右下を[1,1]とした正規化座標にする。
+- connectionは必ず実在するopening_idを1つ参照し、そのopeningのpositionをconnection.positionにも複写する。
 - 壁を共有するだけの空間と、扉や開口を通って直接移動できる空間を区別する。
 - バルコニーに面して見えることと、バルコニーへ直接出入りできることを区別する。
 - 窓と扉を区別する。判別できなければ unknown とする。
@@ -110,8 +114,11 @@ def build_extraction_prompt() -> str:
   "spaces": [
     {"id": "S1", "label": "LDK", "space_type": "room|hall|storage|sanitary|exterior|other", "area_text": "11.1帖|null", "bbox": [0.0, 0.0, 1.0, 1.0], "confidence": "high|medium|low", "evidence": "画像上の文字や位置"}
   ],
+  "openings": [
+    {"id": "O1", "opening_type": "door|glazed_door|open_passage|unknown", "position": [0.5, 0.5], "confidence": "high|medium|low", "evidence": "扉円弧・壁の切れ目"}
+  ],
   "connections": [
-    {"id": "C1", "space_a": "S1", "space_b": "S2", "boundary_relation": "door|glazed_door|open_passage|shared_wall_only|unknown", "traversable": true, "position": [0.0, 0.0], "confidence": "high|medium|low", "evidence": "扉記号や開口の位置"}
+    {"id": "C1", "opening_id": "O1", "space_a": "S1", "space_b": "S2", "boundary_relation": "door|glazed_door|open_passage|shared_wall_only|unknown", "traversable": true, "position": [0.5, 0.5], "confidence": "high|medium|low", "evidence": "扉記号や開口の位置"}
   ],
   "windows": [
     {"id": "W1", "space_id": "S1", "faces_space_id": "S9|null", "faces_exterior": true, "position": [0.0, 0.0], "confidence": "high|medium|low", "evidence": "窓記号の位置"}
@@ -126,6 +133,7 @@ def build_extraction_prompt() -> str:
 }
 
 connectionsには、画像から確認できる空間境界を記録する。直接通行できると確認できた場合だけ traversable をtrueにする。
+openingsにない扉をconnectionsのために追加してはいけない。1つのopeningを複数のconnectionへ使わない。
 JSON以外の説明文やMarkdownコードフェンスは出力しない。
 """.strip()
 
@@ -152,7 +160,7 @@ def parse_structure_response(text: str) -> dict[str, Any]:
     if not isinstance(structure, dict):
         raise RuntimeError("構造化結果がJSONオブジェクトではありません。")
 
-    required = {"image_quality", "orientation", "spaces", "connections", "windows", "fixtures", "negative_observations", "unreadable_items"}
+    required = {"image_quality", "orientation", "spaces", "openings", "connections", "windows", "fixtures", "negative_observations", "unreadable_items"}
     missing = required.difference(structure)
     if missing:
         raise RuntimeError(f"構造化結果の必須項目が不足しています: {', '.join(sorted(missing))}")
@@ -165,6 +173,20 @@ def parse_structure_response(text: str) -> dict[str, Any]:
     if len(space_ids) != len(set(space_ids)):
         raise RuntimeError("空間IDが重複しています。")
 
+    for space in structure["spaces"]:
+        bbox = space.get("bbox")
+        if not _valid_normalized_coordinates(bbox, 4) or bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
+            raise RuntimeError(f"空間{space.get('id')}のbboxが不正です。")
+
+    opening_ids = [item.get("id") for item in structure["openings"] if isinstance(item, dict)]
+    if len(opening_ids) != len(structure["openings"]) or any(not value for value in opening_ids):
+        raise RuntimeError("すべての扉・開口にIDが必要です。")
+    if len(opening_ids) != len(set(opening_ids)):
+        raise RuntimeError("扉・開口IDが重複しています。")
+    for opening in structure["openings"]:
+        if not _valid_normalized_coordinates(opening.get("position"), 2):
+            raise RuntimeError(f"扉・開口{opening.get('id')}のpositionが不正です。")
+
     known_ids = set(space_ids)
     for connection in structure["connections"]:
         if not isinstance(connection, dict):
@@ -173,15 +195,29 @@ def parse_structure_response(text: str) -> dict[str, Any]:
         unknown_ids = endpoints.difference(known_ids)
         if unknown_ids:
             raise RuntimeError(f"接続関係が未定義の空間を参照しています: {', '.join(sorted(map(str, unknown_ids)))}")
+        if connection.get("opening_id") not in set(opening_ids):
+            raise RuntimeError(f"接続関係が未定義の扉・開口を参照しています: {connection.get('opening_id')}")
+        if not _valid_normalized_coordinates(connection.get("position"), 2):
+            raise RuntimeError(f"接続{connection.get('id')}のpositionが不正です。")
     return structure
+
+
+def _valid_normalized_coordinates(value: Any, length: int) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == length
+        and all(isinstance(item, (int, float)) and not isinstance(item, bool) and 0 <= item <= 1 for item in value)
+    )
 
 
 def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Reject structurally implausible edges before they can be used for scoring."""
     enriched = deepcopy(structure)
     spaces = {space["id"]: space for space in enriched["spaces"]}
+    openings = {item["id"]: item for item in enriched.get("openings", [])}
     warnings: list[str] = []
     seen_pairs: set[tuple[str, str, str]] = set()
+    used_openings: set[str] = set()
     for connection in enriched["connections"]:
         connection["validation_status"] = "accepted"
         reasons: list[str] = []
@@ -189,6 +225,7 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
         space_b = spaces[connection["space_b"]]
         relation = connection.get("boundary_relation")
         traversable = connection.get("traversable") is True
+        opening = openings.get(connection.get("opening_id"))
         pair_key = tuple(sorted((space_a["id"], space_b["id"]))) + (str(relation),)
 
         if space_a["id"] == space_b["id"]:
@@ -198,6 +235,22 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
         if pair_key in seen_pairs:
             reasons.append("同一境界の重複")
         seen_pairs.add(pair_key)
+        if connection.get("opening_id") in used_openings:
+            reasons.append("同じ扉・開口を複数接続に使用")
+        used_openings.add(connection.get("opening_id"))
+
+        if traversable and (connection.get("confidence") == "low" or not opening or opening.get("confidence") == "low"):
+            reasons.append("接続または扉のconfidenceがlow")
+        if opening:
+            opening_position = opening.get("position")
+            connection_position = connection.get("position")
+            if _point_distance(opening_position, connection_position) > 0.03:
+                reasons.append("connectionとopeningの座標が不一致")
+            if traversable and (
+                _point_to_bbox_distance(opening_position, space_a.get("bbox")) > 0.06
+                or _point_to_bbox_distance(opening_position, space_b.get("bbox")) > 0.06
+            ):
+                reasons.append("扉座標が両空間の境界付近にない")
 
         types = {space_a.get("space_type"), space_b.get("space_type")}
         labels = f"{space_a.get('label', '')} {space_b.get('label', '')}"
@@ -221,6 +274,22 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
             connection["traversable"] = False
             warnings.append(f"{connection.get('id')}: {' / '.join(reasons)}")
     return enriched, warnings
+
+
+def _point_distance(first: Any, second: Any) -> float:
+    if not _valid_normalized_coordinates(first, 2) or not _valid_normalized_coordinates(second, 2):
+        return float("inf")
+    return ((first[0] - second[0]) ** 2 + (first[1] - second[1]) ** 2) ** 0.5
+
+
+def _point_to_bbox_distance(point: Any, bbox: Any) -> float:
+    """Euclidean distance from a normalized point to a rectangle (zero inside)."""
+    if not _valid_normalized_coordinates(point, 2) or not _valid_normalized_coordinates(bbox, 4):
+        return float("inf")
+    x, y = point
+    dx = max(bbox[0] - x, 0, x - bbox[2])
+    dy = max(bbox[1] - y, 0, y - bbox[3])
+    return (dx * dx + dy * dy) ** 0.5
 
 
 def add_verified_topology(structure: dict[str, Any]) -> dict[str, Any]:
@@ -362,6 +431,8 @@ def build_verification_prompt(draft: dict[str, Any]) -> str:
 間取り画像と、別の読取処理が作った【暫定JSON】を照合し、誤った空間接続を修正してください。評価や改善提案は行わず、修正後の完全なJSONだけを返してください。
 
 重点確認:
+- spacesのbbox、openingsのposition、connectionsのpositionを元画像と再照合する。
+- connectionごとにopening_idが実際の扉・開口を指し、その座標が両空間の境界付近にあるか確認する。
 - 暫定JSONを正しいと仮定せず、すべての traversable=true を元画像の扉・開口記号と再照合する。
 - 扉記号がある壁の両側の空間だけを接続する。近くにある別室と接続しない。
 - 玄関ホールや廊下はL字など不整形になり得る。単純なbboxだけで接続先を決めない。
@@ -665,12 +736,30 @@ def render_analysis_report(scoring: dict[str, Any], structure: dict[str, Any]) -
         cleaned = [str(value).strip() for value in values if str(value).strip()]
         lines.extend(f"- {value}" for value in cleaned or [empty])
 
+    verified_good_points = [
+        f"{item['name']}: {item['reason']}（根拠: {', '.join(item['evidence_ids'])}）"
+        for item in scoring["criteria"]
+        if item["status"] == "confirmed"
+        and item["evidence_ids"]
+        and item["score"] >= round(item["allocation"] * 0.7)
+    ]
+    verified_concerns = list(warnings) + list(scoring["validation_adjustments"])
+    verified_improvements = [
+        f"{'高' if item['score'] < item['allocation'] * 0.5 else '中'}: {item['name']}は追加資料・現地確認後に再評価する"
+        for item in scoring["criteria"]
+        if item["status"] != "confirmed" or item["score"] < item["allocation"] * 0.7
+    ]
+    expert_checks = [
+        "方位、隣棟、法令、構造、段差、扉干渉および有効寸法",
+        "画像で確認不能または機械検証で拒否された接続関係",
+    ]
+
     add_section("接続検証警告", warnings, "機械検出なし")
     add_section("採点の自動補正", scoring["validation_adjustments"], "補正なし")
-    add_section("良い点", scoring["good_points"], "確認できる根拠なし")
-    add_section("気になる点", scoring["concerns"], "確認できる根拠なし")
-    add_section("改善案", scoring["improvements"], "追加確認後に検討")
-    add_section("専門家に確認すべき事項", scoring["expert_checks"], "法令・構造・現地条件")
+    add_section("良い点", verified_good_points, "検証済み根拠から断定できる項目なし")
+    add_section("気になる点", verified_concerns, "機械検出なし")
+    add_section("改善案", verified_improvements, "追加確認後に検討")
+    add_section("専門家に確認すべき事項", expert_checks, "法令・構造・現地条件")
     lines.extend(["", "本評価は画像から確認できた範囲の参考情報であり、建築士による法的・構造的確認の代替ではありません。"])
     return "\n".join(lines)
 

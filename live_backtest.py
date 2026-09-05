@@ -118,6 +118,10 @@ def main() -> int:
             )
             result_path = result_dir / f"{image_path.stem}.md"
             result_path.write_text(report, encoding="utf-8")
+            structure_path = result_dir / f"{image_path.stem}.structure.json"
+            structure_path.write_text(
+                json.dumps(result.structure, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             print(f"保存先: {result_path}")
         except Exception as exc:
             failed = True

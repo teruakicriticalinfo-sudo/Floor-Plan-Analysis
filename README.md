@@ -32,3 +32,9 @@ python -m unittest discover -s tests -v
 ```powershell
 python live_backtest.py
 ```
+
+正解データとの接続精度は次で測定できます。
+
+```powershell
+python tools/evaluate_ground_truth.py "backtest_results/シャルマンフジ住之江公園ドシール.structure.json" "ground_truth/シャルマンフジ住之江公園ドシール.json"
+```
