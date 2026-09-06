@@ -4,9 +4,12 @@ from .analyzer import (
     DEFAULT_MODEL,
     SCORE_CRITERIA,
     FloorPlanAnalysis,
+    PIPELINE_CACHE_VERSION,
+    analyze_cached_structure,
     analyze_floor_plan,
     build_analysis_prompt,
     build_extraction_prompt,
+    compact_structure_for_scoring,
     load_knowledge,
     merge_verification_decisions,
     parse_structure_response,
@@ -22,14 +25,18 @@ from .providers import (
     OllamaClient,
     create_analysis_client,
 )
+from .cache import load_structure_cache, save_structure_cache, structure_cache_key
 
 __all__ = [
     "DEFAULT_MODEL",
     "SCORE_CRITERIA",
     "FloorPlanAnalysis",
+    "PIPELINE_CACHE_VERSION",
+    "analyze_cached_structure",
     "analyze_floor_plan",
     "build_analysis_prompt",
     "build_extraction_prompt",
+    "compact_structure_for_scoring",
     "load_knowledge",
     "merge_verification_decisions",
     "parse_structure_response",
@@ -42,4 +49,7 @@ __all__ = [
     "GeminiClient",
     "OllamaClient",
     "create_analysis_client",
+    "load_structure_cache",
+    "save_structure_cache",
+    "structure_cache_key",
 ]

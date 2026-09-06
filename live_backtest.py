@@ -1,9 +1,11 @@
 """Run the analyzer against every supported image in floor_photo."""
 
+import argparse
 import os
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,9 +15,13 @@ from floor_plan import (
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_HOST,
     SCORE_CRITERIA,
+    analyze_cached_structure,
     analyze_floor_plan,
     create_analysis_client,
     load_knowledge,
+    load_structure_cache,
+    save_structure_cache,
+    structure_cache_key,
 )
 
 
@@ -50,6 +56,11 @@ def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
+    parser = argparse.ArgumentParser(description="間取り画像を構造化して採点します。")
+    parser.add_argument("--no-cache", action="store_true", help="キャッシュを読み書きしない")
+    parser.add_argument("--refresh-cache", action="store_true", help="画像認識をやり直してキャッシュを更新する")
+    args = parser.parse_args()
+
     load_dotenv(APP_DIR / ".env")
     image_dir = APP_DIR / "floor_photo"
     image_paths = sorted(
@@ -65,12 +76,14 @@ def main() -> int:
     default_model = DEFAULT_MODEL if provider == "ollama" else "gemini-2.5-flash"
     model = os.getenv("OLLAMA_MODEL" if provider == "ollama" else "GEMINI_MODEL", default_model).strip() or default_model
     fallback = os.getenv("ENABLE_GEMINI_FALLBACK", "false").strip().lower() in {"1", "true", "yes"}
+    ollama_num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+    ollama_max_images = int(os.getenv("OLLAMA_MAX_IMAGES", "1"))
     try:
         client = create_analysis_client(
             provider,
             ollama_host=os.getenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST),
-            ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "16384")),
-            ollama_max_images=int(os.getenv("OLLAMA_MAX_IMAGES", "1")),
+            ollama_num_ctx=ollama_num_ctx,
+            ollama_max_images=ollama_max_images,
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
             enable_gemini_fallback=fallback,
         )
@@ -79,14 +92,34 @@ def main() -> int:
         return 1
     result_dir = APP_DIR / "backtest_results"
     result_dir.mkdir(exist_ok=True)
+    cache_dir = APP_DIR / ".analysis_cache"
     failed = False
 
     for image_path in image_paths:
         print(f"===== {image_path.name} =====")
         try:
-            with Image.open(image_path) as source:
-                image = ImageOps.exif_transpose(source).convert("RGB")
-            result = analyze_floor_plan(image, client, knowledge, model)
+            started = time.perf_counter()
+            key = structure_cache_key(image_path.read_bytes(), provider, model, ollama_num_ctx, ollama_max_images)
+            cache_path = cache_dir / f"{key}.json"
+            cached = None if args.no_cache or args.refresh_cache else load_structure_cache(cache_path)
+            if cached:
+                print(f"CACHE HIT: 画像認識を省略 ({cache_path.name})")
+                result = analyze_cached_structure(cached[0], cached[1], client, knowledge, model)
+                cache_status = "hit"
+            else:
+                print("CACHE MISS: 画像認識を実行")
+                with Image.open(image_path) as source:
+                    image = ImageOps.exif_transpose(source).convert("RGB")
+                result = analyze_floor_plan(image, client, knowledge, model)
+                cache_status = "disabled" if args.no_cache else "miss"
+                if not args.no_cache:
+                    save_structure_cache(
+                        cache_path,
+                        result.draft_structure,
+                        result.structure,
+                        {"image": image_path.name, "provider": provider, "model": model, "num_ctx": ollama_num_ctx, "max_images": ollama_max_images},
+                    )
+            elapsed = time.perf_counter() - started
             problems = check_response(result.report)
             print("----- DRAFT STRUCTURE -----")
             print(json.dumps(result.draft_structure, ensure_ascii=False, indent=2))
@@ -109,6 +142,8 @@ def main() -> int:
                 f"- 使用モデル: `{model}`\n"
                 f"- プロバイダー: `{client.provider_name}`\n"
                 f"- 知識ファイル: `knowledge.md` 全文\n\n"
+                f"- 構造キャッシュ: `{cache_status}`\n"
+                f"- 処理時間: `{elapsed:.1f}秒`\n\n"
                 f"## 第1段階：最初の読取結果\n\n"
                 f"```json\n{json.dumps(result.draft_structure, ensure_ascii=False, indent=2)}\n```\n\n"
                 f"## 第1段階：再照合後の読取結果\n\n"
@@ -128,6 +163,7 @@ def main() -> int:
                 json.dumps(result.structure, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             print(f"保存先: {result_path}")
+            print(f"処理時間: {elapsed:.1f}秒 / cache={cache_status}")
         except Exception as exc:
             failed = True
             print(f"ERROR: {type(exc).__name__}: {exc}")

@@ -6,12 +6,17 @@ from types import SimpleNamespace
 
 from floor_plan import (
     SCORE_CRITERIA,
+    analyze_cached_structure,
     analyze_floor_plan,
     build_analysis_prompt,
     build_extraction_prompt,
+    compact_structure_for_scoring,
     load_knowledge,
     merge_verification_decisions,
     parse_structure_response,
+    load_structure_cache,
+    save_structure_cache,
+    structure_cache_key,
     validate_connections,
     validate_scoring_json,
 )
@@ -76,7 +81,7 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         knowledge = "玄関の確認項目\nキッチンの確認項目"
         prompt = build_analysis_prompt(knowledge, VALID_STRUCTURE)
         self.assertIn(knowledge, prompt)
-        self.assertIn('"boundary_relation": "shared_wall_only"', prompt)
+        self.assertIn('"boundary_relation":"shared_wall_only"', prompt)
         self.assertIn("traversable=true", prompt)
         self.assertIn("既に独立した個室", prompt)
         self.assertIn("negative_observations", prompt)
@@ -146,6 +151,38 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertLess(scores["安全性・バリアフリー"], 10)
         self.assertLess(scores["将来対応・可変性"], 10)
         self.assertEqual(scoring["total"], sum(scores.values()))
+
+    def test_compact_scoring_structure_removes_geometry_and_rejected_edges(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["connections"][0]["validation_status"] = "rejected"
+        structure["verified_topology"] = {"direct_connections": [], "validation_warnings": ["C1"]}
+        compact = compact_structure_for_scoring(structure)
+        self.assertNotIn("bbox", compact["spaces"][0])
+        self.assertNotIn("openings", compact)
+        self.assertEqual(compact["connections"], [])
+
+    def test_structure_cache_is_versioned_and_model_specific(self):
+        first_key = structure_cache_key(b"image", "ollama", "4b", 8192, 1)
+        second_key = structure_cache_key(b"image", "ollama", "8b", 8192, 1)
+        self.assertNotEqual(first_key, second_key)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "cache.json"
+            save_structure_cache(path, VALID_STRUCTURE, VALID_STRUCTURE, {"model": "4b"})
+            cached = load_structure_cache(path)
+            self.assertIsNotNone(cached)
+            self.assertEqual(cached[0], VALID_STRUCTURE)
+
+    def test_cached_analysis_calls_only_scoring_model(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["verified_topology"] = {
+            "traversable_neighbors": {"S1": [], "S2": []},
+            "direct_connections": [], "non_transit_spaces": [],
+            "confirmed_absences": [], "validation_warnings": [],
+        }
+        client = FakeClient(json.dumps(VALID_SCORING, ensure_ascii=False))
+        result = analyze_cached_structure(VALID_STRUCTURE, structure, client, "参考知識", "test-model")
+        self.assertEqual(len(client.models.calls), 1)
+        self.assertIn("# 総合評価:", result.report)
 
     def test_real_knowledge_is_loaded_in_full(self):
         project_dir = Path(__file__).resolve().parents[1]

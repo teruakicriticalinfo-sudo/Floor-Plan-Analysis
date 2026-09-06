@@ -10,6 +10,7 @@ from typing import Any
 
 
 DEFAULT_MODEL = "qwen3-vl:4b-instruct"
+PIPELINE_CACHE_VERSION = "space-topology-verification-v2"
 
 SCORE_CRITERIA = (
     ("生活動線", 15, "帰宅、家事、来客、各室間の移動に無駄や交錯がないか"),
@@ -701,7 +702,7 @@ def build_analysis_prompt(knowledge: str, structure: dict[str, Any]) -> str:
         f"- {name}: {points}点 — {description}"
         for name, points, description in SCORE_CRITERIA
     )
-    structure_json = json.dumps(structure, ensure_ascii=False, indent=2)
+    structure_json = json.dumps(compact_structure_for_scoring(structure), ensure_ascii=False, separators=(",", ":"))
 
     return f"""
 あなたは住宅の間取りをレビューする分析者です。
@@ -751,6 +752,36 @@ JSON形式:
 {knowledge}
 【参考知識ここまで】
 """.strip()
+
+
+def compact_structure_for_scoring(structure: dict[str, Any]) -> dict[str, Any]:
+    """Remove vision-only geometry and rejected edge details from the scoring prompt."""
+    accepted_connections = [
+        item for item in structure.get("connections", [])
+        if item.get("validation_status", "accepted") == "accepted"
+    ]
+    return {
+        "image_quality": structure.get("image_quality", {}),
+        "orientation": structure.get("orientation", {}),
+        "spaces": [
+            {key: item.get(key) for key in ("id", "label", "space_type", "area_text", "confidence") if key in item}
+            for item in structure.get("spaces", [])
+        ],
+        "connections": [
+            {key: item.get(key) for key in ("id", "space_a", "space_b", "boundary_relation", "traversable", "confidence")}
+            for item in accepted_connections
+        ],
+        "windows": [
+            {key: item.get(key) for key in ("id", "space_id", "faces_space_id", "faces_exterior", "confidence") if key in item}
+            for item in structure.get("windows", [])
+        ],
+        "fixtures": [
+            {key: item.get(key) for key in ("space_id", "fixture", "confidence") if key in item}
+            for item in structure.get("fixtures", [])
+        ],
+        "negative_observations": structure.get("verified_topology", {}).get("confirmed_absences", []),
+        "verified_topology": structure.get("verified_topology", {}),
+    }
 
 
 def analyze_from_structure(
@@ -944,6 +975,22 @@ def analyze_floor_plan(
     """Run topology extraction first, then evaluate the extracted JSON."""
     draft = extract_floor_plan_structure(image, client, model)
     structure = verify_floor_plan_structure(image, draft, client, model)
+    scoring = analyze_from_structure(structure, client, knowledge, model)
+    report = render_analysis_report(scoring, structure)
+    return FloorPlanAnalysis(draft_structure=draft, structure=structure, scoring=scoring, report=report)
+
+
+def analyze_cached_structure(
+    draft: dict[str, Any],
+    structure: dict[str, Any],
+    client: Any,
+    knowledge: str,
+    model: str = DEFAULT_MODEL,
+) -> FloorPlanAnalysis:
+    """Reuse cached vision results and execute only the scoring stage."""
+    parse_structure_response(json.dumps(draft, ensure_ascii=False))
+    if "verified_topology" not in structure:
+        structure = add_verified_topology(structure)
     scoring = analyze_from_structure(structure, client, knowledge, model)
     report = render_analysis_report(scoring, structure)
     return FloorPlanAnalysis(draft_structure=draft, structure=structure, scoring=scoring, report=report)

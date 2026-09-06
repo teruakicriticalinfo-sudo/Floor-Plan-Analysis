@@ -4,5 +4,6 @@ __pycache__/
 *.py[cod]
 .streamlit/
 backtest_results/
+.analysis_cache/
 floor_photo/*
 !floor_photo/.gitkeep

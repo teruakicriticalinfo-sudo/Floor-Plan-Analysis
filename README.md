@@ -36,6 +36,22 @@ python -m unittest discover -s tests -v
 python live_backtest.py
 ```
 
+初回実行では `.analysis_cache` に検証済みの構造を保存します。同じ画像・モデル・抽出設定では、2回目以降は画像認識を省略して採点だけを実行します。`knowledge.md`だけを変更した場合も構造キャッシュを再利用します。
+
+画像認識をやり直す場合:
+
+```powershell
+python live_backtest.py --refresh-cache
+```
+
+キャッシュを一切使わない場合:
+
+```powershell
+python live_backtest.py --no-cache
+```
+
+採点用JSONは、検証済み構造からbbox、扉座標、拒否済み接続、冗長な画像根拠を除いた圧縮形式です。元の完全な構造JSONは結果ファイルとキャッシュに保持されます。
+
 正解データとの接続精度は次で測定できます。
 
 ```powershell

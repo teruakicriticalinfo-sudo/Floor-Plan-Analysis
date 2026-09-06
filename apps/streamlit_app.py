@@ -12,11 +12,16 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from floor_plan import DEFAULT_MODEL, DEFAULT_OLLAMA_HOST, analyze_floor_plan, create_analysis_client, load_knowledge
+from floor_plan import (
+    DEFAULT_MODEL, DEFAULT_OLLAMA_HOST, analyze_cached_structure, analyze_floor_plan,
+    create_analysis_client, load_knowledge, load_structure_cache,
+    save_structure_cache, structure_cache_key,
+)
 
 
 APP_DIR = PROJECT_DIR
 KNOWLEDGE_PATH = APP_DIR / "knowledge.md"
+CACHE_DIR = APP_DIR / ".analysis_cache"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 st.set_page_config(page_title="AI 間取り分析", page_icon="🏠", layout="wide")
@@ -97,16 +102,23 @@ if uploaded_file is not None:
         if analyze_button:
             with st.spinner("空間の接続関係を構造化してから採点中..."):
                 try:
-                    result = analyze_floor_plan(
-                        image=image,
-                        client=client,
-                        knowledge=knowledge,
-                        model=model,
-                    )
+                    key = structure_cache_key(uploaded_file.getvalue(), provider, model, ollama_num_ctx, ollama_max_images)
+                    cache_path = CACHE_DIR / f"{key}.json"
+                    cached = load_structure_cache(cache_path)
+                    if cached:
+                        result = analyze_cached_structure(cached[0], cached[1], client, knowledge, model)
+                        cache_status = "使用（画像認識を省略）"
+                    else:
+                        result = analyze_floor_plan(image=image, client=client, knowledge=knowledge, model=model)
+                        save_structure_cache(
+                            cache_path, result.draft_structure, result.structure,
+                            {"image": uploaded_file.name, "provider": provider, "model": model, "num_ctx": ollama_num_ctx, "max_images": ollama_max_images},
+                        )
+                        cache_status = "新規作成"
                 except Exception as exc:
                     st.error(f"分析に失敗しました: {exc}")
                 else:
-                    st.success("分析が完了しました。")
+                    st.success(f"分析が完了しました。構造キャッシュ: {cache_status}")
                     with st.expander("第1段階：最初の読取結果"):
                         st.json(result.draft_structure)
                     with st.expander("第1段階：再照合後の読取結果", expanded=True):
