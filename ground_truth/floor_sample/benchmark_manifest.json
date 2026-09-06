@@ -1,0 +1,127 @@
+{
+  "name": "floor_sample",
+  "image_count": 30,
+  "review_instruction": "各JSONで connections を人手確認し、完了したものだけ review_status を approved に変更します。",
+  "images": [
+    {
+      "image": "sample1.webp",
+      "ground_truth": "sample1.json"
+    },
+    {
+      "image": "sample10.webp",
+      "ground_truth": "sample10.json"
+    },
+    {
+      "image": "sample11.webp",
+      "ground_truth": "sample11.json"
+    },
+    {
+      "image": "sample12.webp",
+      "ground_truth": "sample12.json"
+    },
+    {
+      "image": "sample13.webp",
+      "ground_truth": "sample13.json"
+    },
+    {
+      "image": "sample14.webp",
+      "ground_truth": "sample14.json"
+    },
+    {
+      "image": "sample15.webp",
+      "ground_truth": "sample15.json"
+    },
+    {
+      "image": "sample16.webp",
+      "ground_truth": "sample16.json"
+    },
+    {
+      "image": "sample17.webp",
+      "ground_truth": "sample17.json"
+    },
+    {
+      "image": "sample18.webp",
+      "ground_truth": "sample18.json"
+    },
+    {
+      "image": "sample19.webp",
+      "ground_truth": "sample19.json"
+    },
+    {
+      "image": "sample2.webp",
+      "ground_truth": "sample2.json"
+    },
+    {
+      "image": "sample20.webp",
+      "ground_truth": "sample20.json"
+    },
+    {
+      "image": "sample21.webp",
+      "ground_truth": "sample21.json"
+    },
+    {
+      "image": "sample22.webp",
+      "ground_truth": "sample22.json"
+    },
+    {
+      "image": "sample23.webp",
+      "ground_truth": "sample23.json"
+    },
+    {
+      "image": "sample24.webp",
+      "ground_truth": "sample24.json"
+    },
+    {
+      "image": "sample25.webp",
+      "ground_truth": "sample25.json"
+    },
+    {
+      "image": "sample26.webp",
+      "ground_truth": "sample26.json"
+    },
+    {
+      "image": "sample27.webp",
+      "ground_truth": "sample27.json"
+    },
+    {
+      "image": "sample28.webp",
+      "ground_truth": "sample28.json"
+    },
+    {
+      "image": "sample29.webp",
+      "ground_truth": "sample29.json"
+    },
+    {
+      "image": "sample3.webp",
+      "ground_truth": "sample3.json"
+    },
+    {
+      "image": "sample30.webp",
+      "ground_truth": "sample30.json"
+    },
+    {
+      "image": "sample4.webp",
+      "ground_truth": "sample4.json"
+    },
+    {
+      "image": "sample5.webp",
+      "ground_truth": "sample5.json"
+    },
+    {
+      "image": "sample6.webp",
+      "ground_truth": "sample6.json"
+    },
+    {
+      "image": "sample7.webp",
+      "ground_truth": "sample7.json"
+    },
+    {
+      "image": "sample8.webp",
+      "ground_truth": "sample8.json"
+    },
+    {
+      "image": "sample9.webp",
+      "ground_truth": "sample9.json"
+    }
+  ]
+}

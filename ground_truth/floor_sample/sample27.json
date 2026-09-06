@@ -1,0 +1,10 @@
+{
+  "image": "sample27.webp",
+  "review_status": "pending",
+  "notes": "画像を見て、収納を除く直接通行可能な接続だけを connections に記入してください。",
+  "ignore_space_types": [
+    "storage"
+  ],
+  "connections": [],
+  "label_aliases": {}
+}

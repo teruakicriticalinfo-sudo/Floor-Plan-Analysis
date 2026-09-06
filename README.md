@@ -67,3 +67,31 @@ python tools/evaluate_ground_truth.py "backtest_results/シャルマンフジ住
 ```
 
 結果ファイル名にはモデル名が付くため、4Bと8Bの結果は上書きされません。
+
+## ローカル評価セットの正解データ化
+
+`floor_sample` のようなローカル画像セットは、まず分析して構造JSONを出力します。
+
+```powershell
+python live_backtest.py --input-dir floor_sample --results-dir backtest_results/floor_sample
+```
+
+その後、構造JSONを下書きにした正解データテンプレートを生成します。
+
+```powershell
+python tools/prepare_ground_truth.py --images-dir floor_sample --ground-truth-dir ground_truth/floor_sample --structure-dir backtest_results/floor_sample
+```
+
+各 `ground_truth/floor_sample/*.json` の `connections` を元画像と照合して修正し、確認を終えたファイルだけ `review_status` を `approved` に変更します。未確認の下書きは集計対象になりません。
+
+先に構造JSONなしでテンプレートを作成していた場合は、分析後に次のように `--overwrite` を付けて実行すると、AIの採用接続を下書きに入れ直せます。人手で修正を始めた後は上書きしません。
+
+```powershell
+python tools/prepare_ground_truth.py --images-dir floor_sample --ground-truth-dir ground_truth/floor_sample --structure-dir backtest_results/floor_sample --overwrite
+```
+
+確認済みデータを一括集計するには次を実行します。複数モデルの結果が同居する場合は、`--model` に結果ファイル名のモデル部分を指定します。
+
+```powershell
+python tools/evaluate_benchmark.py --structure-dir backtest_results/floor_sample --ground-truth-dir ground_truth/floor_sample --model qwen3-vl_8b-instruct-q4_K_M --output backtest_results/floor_sample/benchmark.json
+```
