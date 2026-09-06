@@ -34,7 +34,7 @@ class OllamaClient:
 
     provider_name = "ollama"
 
-    def __init__(self, host: str = DEFAULT_OLLAMA_HOST, timeout: int = 600, num_ctx: int = 16384, max_images: int = 1):
+    def __init__(self, host: str = DEFAULT_OLLAMA_HOST, timeout: int = 1200, num_ctx: int = 16384, max_images: int = 1):
         self.host = host.rstrip("/")
         self.timeout = timeout
         self.num_ctx = num_ctx
@@ -153,6 +153,7 @@ def create_analysis_client(
     provider: str,
     *,
     ollama_host: str = DEFAULT_OLLAMA_HOST,
+    ollama_timeout: int = 1200,
     ollama_num_ctx: int = 16384,
     ollama_max_images: int = 1,
     gemini_api_key: str = "",
@@ -161,7 +162,12 @@ def create_analysis_client(
     """Create the configured provider without requiring a Gemini key for local use."""
     normalized = provider.strip().lower()
     if normalized == "ollama":
-        primary = OllamaClient(ollama_host, num_ctx=ollama_num_ctx, max_images=ollama_max_images)
+        primary = OllamaClient(
+            ollama_host,
+            timeout=ollama_timeout,
+            num_ctx=ollama_num_ctx,
+            max_images=ollama_max_images,
+        )
         if enable_gemini_fallback and gemini_api_key:
             return FallbackClient(primary, GeminiClient(gemini_api_key))
         return primary

@@ -15,6 +15,7 @@ from floor_plan import (
     merge_verification_decisions,
     parse_structure_response,
     load_structure_cache,
+    create_analysis_client,
     save_structure_cache,
     structure_cache_key,
     validate_connections,
@@ -171,6 +172,10 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
             cached = load_structure_cache(path)
             self.assertIsNotNone(cached)
             self.assertEqual(cached[0], VALID_STRUCTURE)
+
+    def test_ollama_timeout_is_configurable(self):
+        client = create_analysis_client("ollama", ollama_timeout=1800)
+        self.assertEqual(client.timeout, 1800)
 
     def test_cached_analysis_calls_only_scoring_model(self):
         structure = json.loads(json.dumps(VALID_STRUCTURE))

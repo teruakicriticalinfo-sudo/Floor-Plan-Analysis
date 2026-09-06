@@ -36,10 +36,11 @@ def get_knowledge(path: str, modified_ns: int) -> str:
 
 
 @st.cache_resource
-def get_analysis_client(provider: str, host: str, num_ctx: int, max_images: int, api_key: str, fallback: bool):
+def get_analysis_client(provider: str, host: str, timeout: int, num_ctx: int, max_images: int, api_key: str, fallback: bool):
     return create_analysis_client(
         provider,
         ollama_host=host,
+        ollama_timeout=timeout,
         ollama_num_ctx=num_ctx,
         ollama_max_images=max_images,
         gemini_api_key=api_key,
@@ -66,11 +67,12 @@ default_model = DEFAULT_MODEL if provider == "ollama" else "gemini-2.5-flash"
 model = os.getenv("OLLAMA_MODEL" if provider == "ollama" else "GEMINI_MODEL", default_model).strip() or default_model
 fallback = os.getenv("ENABLE_GEMINI_FALLBACK", "false").strip().lower() in {"1", "true", "yes"}
 ollama_host = os.getenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
+ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", "1200"))
 ollama_num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 ollama_max_images = int(os.getenv("OLLAMA_MAX_IMAGES", "1"))
 
 try:
-    client = get_analysis_client(provider, ollama_host, ollama_num_ctx, ollama_max_images, api_key, fallback)
+    client = get_analysis_client(provider, ollama_host, ollama_timeout, ollama_num_ctx, ollama_max_images, api_key, fallback)
 except ValueError as exc:
     st.error(str(exc))
     st.stop()

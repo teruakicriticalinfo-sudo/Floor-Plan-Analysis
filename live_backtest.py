@@ -98,10 +98,12 @@ def main() -> int:
     fallback = os.getenv("ENABLE_GEMINI_FALLBACK", "false").strip().lower() in {"1", "true", "yes"}
     ollama_num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
     ollama_max_images = int(os.getenv("OLLAMA_MAX_IMAGES", "1"))
+    ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", "1200"))
     try:
         client = create_analysis_client(
             provider,
             ollama_host=os.getenv("OLLAMA_HOST", DEFAULT_OLLAMA_HOST),
+            ollama_timeout=ollama_timeout,
             ollama_num_ctx=ollama_num_ctx,
             ollama_max_images=ollama_max_images,
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
