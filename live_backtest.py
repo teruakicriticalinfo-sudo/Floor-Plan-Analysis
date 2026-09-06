@@ -1,4 +1,4 @@
-"""Run the analyzer against every supported image in floor_photo."""
+"""Run the analyzer against every supported image in a chosen folder."""
 
 import argparse
 import os
@@ -52,17 +52,37 @@ def check_response(response: str) -> list[str]:
     return problems
 
 
+def resolve_app_path(value: Path) -> Path:
+    """Resolve relative CLI paths from the project directory."""
+    return value if value.is_absolute() else APP_DIR / value
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
     parser = argparse.ArgumentParser(description="間取り画像を構造化して採点します。")
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=Path("floor_photo"),
+        help="分析する画像フォルダ（既定: floor_photo）",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=Path("backtest_results"),
+        help="結果Markdown/JSONの保存先（既定: backtest_results）",
+    )
     parser.add_argument("--no-cache", action="store_true", help="キャッシュを読み書きしない")
     parser.add_argument("--refresh-cache", action="store_true", help="画像認識をやり直してキャッシュを更新する")
     args = parser.parse_args()
 
     load_dotenv(APP_DIR / ".env")
-    image_dir = APP_DIR / "floor_photo"
+    image_dir = resolve_app_path(args.input_dir)
+    if not image_dir.is_dir():
+        print(f"ERROR: 画像フォルダがありません: {image_dir}", file=sys.stderr)
+        return 1
     image_paths = sorted(
         path for path in image_dir.iterdir()
         if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
@@ -90,8 +110,8 @@ def main() -> int:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    result_dir = APP_DIR / "backtest_results"
-    result_dir.mkdir(exist_ok=True)
+    result_dir = resolve_app_path(args.results_dir)
+    result_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = APP_DIR / ".analysis_cache"
     failed = False
 

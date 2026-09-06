@@ -36,6 +36,14 @@ python -m unittest discover -s tests -v
 python live_backtest.py
 ```
 
+任意の画像フォルダも直接指定できます。たとえば、ローカルの評価セット
+`floor_sample` を分析する場合は次のとおりです。元画像はGitに追加せず、
+結果だけを `backtest_results/floor_sample` に保存します。
+
+```powershell
+python live_backtest.py --input-dir floor_sample --results-dir backtest_results/floor_sample
+```
+
 初回実行では `.analysis_cache` に検証済みの構造を保存します。同じ画像・モデル・抽出設定では、2回目以降は画像認識を省略して採点だけを実行します。`knowledge.md`だけを変更した場合も構造キャッシュを再利用します。
 
 画像認識をやり直す場合:
