@@ -10,7 +10,7 @@ from typing import Any
 
 
 DEFAULT_MODEL = "qwen3-vl:4b-instruct"
-PIPELINE_CACHE_VERSION = "space-topology-json-repair-v3"
+PIPELINE_CACHE_VERSION = "floor-aware-topology-v4"
 
 SCORE_CRITERIA = (
     ("生活動線", 15, "帰宅、家事、来客、各室間の移動に無駄や交錯がないか"),
@@ -29,7 +29,7 @@ STRUCTURE_JSON_SCHEMA = {
     "properties": {
         "image_quality": {"type": "object"},
         "orientation": {"type": "object"},
-        "spaces": {"type": "array", "items": {"type": "object", "required": ["id", "label", "space_type", "bbox", "confidence"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "space_type": {"type": "string"}, "area_text": {"type": ["string", "null"]}, "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
+        "spaces": {"type": "array", "items": {"type": "object", "required": ["id", "label", "space_type", "bbox", "confidence"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "space_type": {"type": "string"}, "floor_id": {"type": ["string", "null"]}, "area_text": {"type": ["string", "null"]}, "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "openings": {"type": "array", "items": {"type": "object", "required": ["id", "opening_type", "position", "confidence"], "properties": {"id": {"type": "string"}, "opening_type": {"type": "string"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "connections": {"type": "array", "items": {"type": "object", "required": ["id", "opening_id", "space_a", "space_b", "boundary_relation", "traversable", "position", "confidence"], "properties": {"id": {"type": "string"}, "opening_id": {"type": "string"}, "space_a": {"type": "string"}, "space_b": {"type": "string"}, "boundary_relation": {"type": "string"}, "traversable": {"type": "boolean"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "windows": {"type": "array", "items": {"type": "object"}},
@@ -140,7 +140,8 @@ def build_extraction_prompt() -> str:
 - 線が不鮮明な場合は推測せず confidence を low、値を null または unknown にする。
 - 画像に描かれていない収納、通路、扉、窓を追加しない。
 - すべての空間に一意のIDを付け、connections/windowsからはそのIDだけを参照する。
-- 屋外、バルコニー、玄関ホール、廊下、収納、水回りも独立したspaceとして登録する。
+- 屋外、バルコニー、玄関ホール、廊下、収納、水回りも独立したspaceとして登録する。階段はspace_type=vertical_circulationとする。
+- 「1階平面図」「2階平面図」など複数階が同じ画像にある場合、各spaceにfloor_id（例: "1F", "2F"）を必ず付ける。別階のspaceを直接connectionにしてはいけない。階段を通る接続だけは例外。
 - 扉は、扉記号が描かれた壁の両側にある2空間だけを接続する。単に近い空間とは接続しない。
 - 開口の座標が両空間の境界上にあるかを確認してから traversable=true にする。
 - 玄関の外部ドアも屋外とのconnectionとして記録する。
@@ -152,7 +153,7 @@ def build_extraction_prompt() -> str:
   "image_quality": {"level": "high|medium|low", "notes": ["..."]},
   "orientation": {"value": null, "confidence": "high|medium|low", "evidence": "..."},
   "spaces": [
-    {"id": "S1", "label": "LDK", "space_type": "room|hall|storage|sanitary|exterior|other", "area_text": "11.1帖|null", "bbox": [0.0, 0.0, 1.0, 1.0], "confidence": "high|medium|low", "evidence": "画像上の文字や位置"}
+    {"id": "S1", "label": "LDK", "space_type": "room|hall|storage|sanitary|exterior|vertical_circulation|other", "floor_id": "1F|null", "area_text": "11.1帖|null", "bbox": [0.0, 0.0, 1.0, 1.0], "confidence": "high|medium|low", "evidence": "画像上の文字や位置"}
   ],
   "openings": [
     {"id": "O1", "opening_type": "door|glazed_door|open_passage|unknown", "position": [0.5, 0.5], "confidence": "high|medium|low", "evidence": "扉円弧・壁の切れ目"}
@@ -190,10 +191,11 @@ def build_space_inventory_prompt() -> str:
 - キッチンがLDK内の設備なら独立roomにしない。
 - 上下など離れたバルコニーは別々のexterior空間にする。
 - CL、押入などの収納も個別のstorage空間にする。
+- 複数階が同一画像にある場合は、1階・2階などの図面ごとにfloor_idを分ける。階段はvertical_circulationとして登録する。
 - 読めない空間を推測で作らない。bboxは文字だけでなく壁で囲まれた領域全体を示す。
 
 JSON形式:
-{"image_quality":{"level":"high|medium|low","notes":[]},"orientation":{"value":null,"confidence":"high|medium|low","evidence":"..."},"spaces":[{"id":"S1","label":"LDK","space_type":"room|hall|storage|sanitary|exterior|other","area_text":"14.5帖|null","bbox":[0,0,1,1],"confidence":"high|medium|low","evidence":"..."}]}
+{"image_quality":{"level":"high|medium|low","notes":[]},"orientation":{"value":null,"confidence":"high|medium|low","evidence":"..."},"spaces":[{"id":"S1","label":"LDK","space_type":"room|hall|storage|sanitary|exterior|vertical_circulation|other","floor_id":"1F|null","area_text":"14.5帖|null","bbox":[0,0,1,1],"confidence":"high|medium|low","evidence":"..."}]}
 JSON以外は返さない。
 """.strip()
 
@@ -212,7 +214,7 @@ def build_topology_prompt(inventory: dict[str, Any]) -> str:
 
 出力を短く保つ:
 - 指定されたキー以外は出力しない。evidenceは12文字以内、unreadable_itemsは1項目20文字以内にする。
-- 同じ境界・窓・設備を繰り返さない。openingsとconnectionsは各30件まで、windowsとfixturesは各20件までにする。
+- 同じ境界・窓・設備を繰り返さない。画像上で確認できる実数だけを出力する。
 - JSONを途中で切らない。情報量が多い場合は、confidenceをlowにして省略し、unreadable_itemsへ短く記録する。
 
 注意:
@@ -220,6 +222,7 @@ def build_topology_prompt(inventory: dict[str, Any]) -> str:
 - 浴室の入口は通常、隣接する洗面所・脱衣所側を重点確認する。
 - キッチン設備はLDK内ならfixtureであり、独立したconnectionを作らない。
 - opening_idは1つのconnectionにだけ使う。
+- floor_idが異なるspace同士を直接接続してはいけない。階段（vertical_circulation）を介する場合だけ、同じ階のspaceと階段を接続する。
 
 【確定済み空間一覧】
 {json.dumps(inventory["spaces"], ensure_ascii=False, separators=(',', ':'))}
@@ -347,6 +350,15 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
 
         types = {space_a.get("space_type"), space_b.get("space_type")}
         labels = f"{space_a.get('label', '')} {space_b.get('label', '')}"
+        floor_a, floor_b = space_a.get("floor_id"), space_b.get("floor_id")
+        if (
+            traversable
+            and floor_a
+            and floor_b
+            and floor_a != floor_b
+            and "vertical_circulation" not in types
+        ):
+            reasons.append("別階の空間を階段なしで直接接続している")
         if traversable and "バルコニー" in labels and "hall" in types:
             reasons.append("玄関・廊下とバルコニーの直結は要画像再確認")
         if traversable and "exterior" in types and ("storage" in types or "sanitary" in types):
@@ -372,6 +384,23 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
             connection["traversable"] = False
             warnings.append(f"{connection.get('id')}: {' / '.join(reasons)}")
     return enriched, warnings
+
+
+def deduplicate_topology_observations(topology: dict[str, Any]) -> dict[str, Any]:
+    """Keep one strongest observation per pair of spaces before verification."""
+    result = deepcopy(topology)
+    confidence_rank = {"high": 3, "medium": 2, "low": 1}
+    chosen: dict[tuple[str, str], dict[str, Any]] = {}
+    for connection in result.get("connections", []):
+        first, second = str(connection.get("space_a", "")), str(connection.get("space_b", ""))
+        key = tuple(sorted((first, second)))
+        previous = chosen.get(key)
+        if previous is None or confidence_rank.get(connection.get("confidence"), 0) > confidence_rank.get(previous.get("confidence"), 0):
+            chosen[key] = connection
+    result["connections"] = list(chosen.values())
+    used_openings = {item.get("opening_id") for item in result["connections"]}
+    result["openings"] = [item for item in result.get("openings", []) if item.get("id") in used_openings]
+    return result
 
 
 def _point_distance(first: Any, second: Any) -> float:
@@ -404,6 +433,14 @@ def add_verified_topology(structure: dict[str, Any]) -> dict[str, Any]:
                 {"connection_id": connection.get("id"), "spaces": [space_a, space_b]}
             )
 
+    rejected_count = sum(
+        1 for connection in enriched["connections"]
+        if connection.get("validation_status") == "rejected"
+    )
+    connection_count = len(enriched["connections"])
+    accepted_count = len(direct_connections)
+    low_reliability = connection_count >= 3 and rejected_count >= accepted_count and rejected_count >= 2
+
     space_types = {space["id"]: space.get("space_type") for space in enriched["spaces"]}
     enriched["verified_topology"] = {
         "traversable_neighbors": {key: sorted(value) for key, value in neighbors.items()},
@@ -417,6 +454,12 @@ def add_verified_topology(structure: dict[str, Any]) -> dict[str, Any]:
             if observation.get("confidence") == "high"
         ],
         "validation_warnings": warnings,
+        "connection_quality": {
+            "observed_count": connection_count,
+            "accepted_count": accepted_count,
+            "rejected_count": rejected_count,
+            "reliability": "low" if low_reliability else "usable",
+        },
     }
     return enriched
 
@@ -641,6 +684,7 @@ def extract_floor_plan_structure(image: Any, client: Any, model: str = DEFAULT_M
         "扉・接続結果",
         TOPOLOGY_OBSERVATION_SCHEMA,
     )
+    topology = deduplicate_topology_observations(topology)
     combined = {**inventory, **topology}
     return parse_structure_response(json.dumps(combined, ensure_ascii=False))
 
@@ -814,7 +858,7 @@ def compact_structure_for_scoring(structure: dict[str, Any]) -> dict[str, Any]:
         "image_quality": structure.get("image_quality", {}),
         "orientation": structure.get("orientation", {}),
         "spaces": [
-            {key: item.get(key) for key in ("id", "label", "space_type", "area_text", "confidence") if key in item}
+            {key: item.get(key) for key in ("id", "label", "space_type", "floor_id", "area_text", "confidence") if key in item}
             for item in structure.get("spaces", [])
         ],
         "connections": [
@@ -891,6 +935,12 @@ def _criterion_cap(name: str, allocation: int, structure: dict[str, Any]) -> tup
     )
     spaces = structure.get("spaces", [])
     fixtures = structure.get("fixtures", [])
+    connection_quality = structure.get("verified_topology", {}).get("connection_quality", {})
+
+    if connection_quality.get("reliability") == "low" and name in {
+        "生活動線", "ゾーニング・プライバシー", "家事効率", "安全性・バリアフリー",
+    }:
+        return allocation // 2, "接続の大半が機械検証で拒否されたため中立点以下"
 
     if name == "採光・通風" and not windows and not glazed:
         return allocation // 2, "窓・ガラス戸の確認根拠がないため中立点以下"
@@ -926,8 +976,15 @@ def validate_scoring_json(text: str, structure: dict[str, Any]) -> dict[str, Any
     for name, allocation, _ in SCORE_CRITERIA:
         item = proposed.get(name, {})
         status = item.get("status") if item.get("status") in status_ratios else "unverifiable"
-        evidence_ids = [value for value in item.get("evidence_ids", []) if value in valid_ids]
-        invalid_ids = [value for value in item.get("evidence_ids", []) if value not in valid_ids]
+        requested_ids = item.get("evidence_ids", [])
+        evidence_ids = [value for value in requested_ids if value in valid_ids]
+        invalid_ids = [value for value in requested_ids if value not in valid_ids]
+        if name == "収納":
+            storage_ids = {space["id"] for space in structure["spaces"] if space.get("space_type") == "storage"}
+            non_storage_ids = [value for value in evidence_ids if value not in storage_ids]
+            evidence_ids = [value for value in evidence_ids if value in storage_ids]
+            if non_storage_ids:
+                invalid_ids.extend(non_storage_ids)
         if not evidence_ids:
             status = "unverifiable"
         proposed_score = item.get("proposed_score", 0)

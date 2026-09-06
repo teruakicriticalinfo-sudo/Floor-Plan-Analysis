@@ -74,6 +74,10 @@ def main() -> int:
         default=Path("backtest_results"),
         help="結果Markdown/JSONの保存先（既定: backtest_results）",
     )
+    parser.add_argument(
+        "--image",
+        help="指定した1画像だけを分析する。例: sample1.webp",
+    )
     parser.add_argument("--no-cache", action="store_true", help="キャッシュを読み書きしない")
     parser.add_argument("--refresh-cache", action="store_true", help="画像認識をやり直してキャッシュを更新する")
     args = parser.parse_args()
@@ -87,8 +91,10 @@ def main() -> int:
         path for path in image_dir.iterdir()
         if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
     )
+    if args.image:
+        image_paths = [path for path in image_paths if path.name == args.image]
     if not image_paths:
-        print("ERROR: floor_photoに対応画像がありません。", file=sys.stderr)
+        print(f"ERROR: {image_dir} に対応画像がありません。", file=sys.stderr)
         return 1
 
     knowledge = load_knowledge(APP_DIR / "knowledge.md")

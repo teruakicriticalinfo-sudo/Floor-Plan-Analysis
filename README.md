@@ -44,6 +44,12 @@ python live_backtest.py
 python live_backtest.py --input-dir floor_sample --results-dir backtest_results/floor_sample
 ```
 
+特定の1件だけを再分析する場合は、`--image` を使います。
+
+```powershell
+python live_backtest.py --input-dir floor_sample --results-dir backtest_results/floor_sample --image sample1.webp --refresh-cache
+```
+
 初回実行では `.analysis_cache` に検証済みの構造を保存します。同じ画像・モデル・抽出設定では、2回目以降は画像認識を省略して採点だけを実行します。`knowledge.md`だけを変更した場合も構造キャッシュを再利用します。
 
 画像認識をやり直す場合:

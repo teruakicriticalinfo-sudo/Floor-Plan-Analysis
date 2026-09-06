@@ -11,6 +11,7 @@ from floor_plan import (
     build_analysis_prompt,
     build_extraction_prompt,
     compact_structure_for_scoring,
+    deduplicate_topology_observations,
     load_knowledge,
     merge_verification_decisions,
     parse_structure_response,
@@ -128,6 +129,30 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertFalse(checked["connections"][0]["traversable"])
         self.assertTrue(any("洗面所・脱衣所" in warning for warning in warnings))
 
+    def test_cross_floor_connection_without_stairs_is_rejected(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"][0]["floor_id"] = "1F"
+        structure["spaces"][1]["floor_id"] = "2F"
+        structure["connections"][0].update(boundary_relation="door", traversable=True)
+        checked, warnings = validate_connections(structure)
+        self.assertFalse(checked["connections"][0]["traversable"])
+        self.assertTrue(any("別階" in warning for warning in warnings))
+
+    def test_duplicate_topology_pairs_are_collapsed_before_verification(self):
+        topology = {
+            "openings": [
+                {"id": "O1", "position": [0.5, 0.5]},
+                {"id": "O2", "position": [0.5, 0.55]},
+            ],
+            "connections": [
+                {"id": "C1", "opening_id": "O1", "space_a": "S1", "space_b": "S2", "confidence": "high"},
+                {"id": "C2", "opening_id": "O2", "space_a": "S2", "space_b": "S1", "confidence": "medium"},
+            ],
+        }
+        collapsed = deduplicate_topology_observations(topology)
+        self.assertEqual([item["id"] for item in collapsed["connections"]], ["C1"])
+        self.assertEqual([item["id"] for item in collapsed["openings"]], ["O1"])
+
     def test_opening_outside_both_spaces_is_rejected(self):
         structure = json.loads(json.dumps(VALID_STRUCTURE))
         structure["connections"][0].update(boundary_relation="door", traversable=True, position=[0.05, 0.05])
@@ -153,6 +178,25 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertLess(scores["安全性・バリアフリー"], 10)
         self.assertLess(scores["将来対応・可変性"], 10)
         self.assertEqual(scoring["total"], sum(scores.values()))
+
+    def test_low_connection_reliability_caps_route_dependent_scores(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["verified_topology"] = {
+            "validation_warnings": [], "direct_connections": [],
+            "connection_quality": {"reliability": "low"},
+        }
+        scoring = validate_scoring_json(json.dumps(VALID_SCORING, ensure_ascii=False), structure)
+        scores = {item["name"]: item["score"] for item in scoring["criteria"]}
+        self.assertLessEqual(scores["生活動線"], 7)
+        self.assertLessEqual(scores["安全性・バリアフリー"], 5)
+
+    def test_exterior_cannot_be_storage_evidence(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["verified_topology"] = {"validation_warnings": [], "direct_connections": []}
+        scoring = validate_scoring_json(json.dumps(VALID_SCORING, ensure_ascii=False), structure)
+        storage = next(item for item in scoring["criteria"] if item["name"] == "収納")
+        self.assertEqual(storage["status"], "unverifiable")
+        self.assertLessEqual(storage["score"], 5)
 
     def test_compact_scoring_structure_removes_geometry_and_rejected_edges(self):
         structure = json.loads(json.dumps(VALID_STRUCTURE))
