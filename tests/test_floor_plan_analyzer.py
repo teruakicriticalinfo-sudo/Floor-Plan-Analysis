@@ -21,6 +21,7 @@ from floor_plan import (
     validate_connections,
     validate_scoring_json,
 )
+from floor_plan.analyzer import TOPOLOGY_OBSERVATION_SCHEMA, _parse_or_repair_json_object
 
 
 VALID_STRUCTURE = {
@@ -176,6 +177,18 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
     def test_ollama_timeout_is_configurable(self):
         client = create_analysis_client("ollama", ollama_timeout=1800)
         self.assertEqual(client.timeout, 1800)
+
+    def test_malformed_topology_json_is_repaired_once(self):
+        repaired = {
+            "openings": [], "connections": [], "windows": [], "fixtures": [],
+            "negative_observations": [], "unreadable_items": [],
+        }
+        client = FakeClient(json.dumps(repaired, ensure_ascii=False))
+        value = _parse_or_repair_json_object(
+            '{"openings": [}', client, "test-model", "扉・接続結果", TOPOLOGY_OBSERVATION_SCHEMA
+        )
+        self.assertEqual(value, repaired)
+        self.assertEqual(len(client.models.calls), 1)
 
     def test_cached_analysis_calls_only_scoring_model(self):
         structure = json.loads(json.dumps(VALID_STRUCTURE))

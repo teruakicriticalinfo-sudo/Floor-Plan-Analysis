@@ -10,7 +10,7 @@ from typing import Any
 
 
 DEFAULT_MODEL = "qwen3-vl:4b-instruct"
-PIPELINE_CACHE_VERSION = "space-topology-verification-v2"
+PIPELINE_CACHE_VERSION = "space-topology-json-repair-v3"
 
 SCORE_CRITERIA = (
     ("生活動線", 15, "帰宅、家事、来客、各室間の移動に無駄や交錯がないか"),
@@ -209,6 +209,11 @@ def build_topology_prompt(inventory: dict[str, Any]) -> str:
 2. 各opening.positionの両側にあるspace IDを、bboxだけでなく壁の形状も見て決める。
 3. 対応できるopeningだけconnectionsへ登録する。不明なら接続を推測せずunreadable_itemsへ記録する。
 4. 窓、設備、明確な不存在も記録する。
+
+出力を短く保つ:
+- 指定されたキー以外は出力しない。evidenceは12文字以内、unreadable_itemsは1項目20文字以内にする。
+- 同じ境界・窓・設備を繰り返さない。openingsとconnectionsは各30件まで、windowsとfixturesは各20件までにする。
+- JSONを途中で切らない。情報量が多い場合は、confidenceをlowにして省略し、unreadable_itemsへ短く記録する。
 
 注意:
 - 中央の廊下・ホールから左右の居室や水回りへ開く扉を、居室同士の直結と誤認しない。
@@ -629,19 +634,64 @@ def extract_floor_plan_structure(image: Any, client: Any, model: str = DEFAULT_M
         contents=build_visual_contents(build_topology_prompt(inventory), image),
         config={"response_mime_type": "application/json", "response_json_schema": TOPOLOGY_OBSERVATION_SCHEMA, "temperature": 0},
     )
-    topology = _parse_json_object(_response_text(topology_response, "扉・接続結果"), "扉・接続結果")
+    topology = _parse_or_repair_json_object(
+        _response_text(topology_response, "扉・接続結果"),
+        client,
+        model,
+        "扉・接続結果",
+        TOPOLOGY_OBSERVATION_SCHEMA,
+    )
     combined = {**inventory, **topology}
     return parse_structure_response(json.dumps(combined, ensure_ascii=False))
 
 
 def _parse_json_object(text: str, stage: str) -> dict[str, Any]:
+    candidate = text.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", candidate, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        candidate = fenced.group(1)
+    elif "{" in candidate and "}" in candidate:
+        candidate = candidate[candidate.find("{") : candidate.rfind("}") + 1]
     try:
-        value = json.loads(text)
+        value = json.loads(candidate)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"{stage}をJSONとして解釈できません: {exc}") from exc
     if not isinstance(value, dict):
         raise RuntimeError(f"{stage}がJSONオブジェクトではありません。")
     return value
+
+
+def _parse_or_repair_json_object(
+    text: str,
+    client: Any,
+    model: str,
+    stage: str,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Repair a malformed stage JSON once, without re-reading the image."""
+    try:
+        return _parse_json_object(text, stage)
+    except RuntimeError as original_error:
+        repair_prompt = f"""
+次のJSONは構文だけが壊れています。内容を追加・削除・推測・要約せず、JSON構文だけを修復してください。
+Markdownや説明は出力せず、JSONオブジェクトだけを返してください。配列要素、ID、文字列内容は維持してください。
+
+【壊れたJSON】
+{text}
+""".strip()
+        response = _generate_with_retry(
+            client,
+            model=model,
+            contents=[repair_prompt],
+            config={"response_mime_type": "application/json", "response_json_schema": schema, "temperature": 0},
+        )
+        try:
+            return _parse_json_object(_response_text(response, f"{stage}のJSON修復結果"), stage)
+        except RuntimeError as repair_error:
+            raise RuntimeError(
+                f"{stage}のJSONが不正で、自動修復にも失敗しました。"
+                f" 元のエラー: {original_error}; 修復後: {repair_error}"
+            ) from repair_error
 
 
 def verify_floor_plan_structure(
