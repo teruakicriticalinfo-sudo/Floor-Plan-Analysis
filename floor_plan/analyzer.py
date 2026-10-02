@@ -1360,6 +1360,8 @@ def analyze_from_structure(
             raise RuntimeError("複数階の所属が未確定のため採点を停止しました。")
     quality = structure.get("verified_topology", {}).get("connection_quality", {})
     hold_reasons = []
+    if structure.get("manual_correction_status") == "draft":
+        hold_reasons.append("位置修正が未承認の下書きのため採点を保留")
     if structure.get("floor_reading_fallbacks"):
         if structure.get("floor_hall_recoveries"):
             hold_reasons.append(

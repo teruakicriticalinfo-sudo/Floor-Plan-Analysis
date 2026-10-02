@@ -1,0 +1,37 @@
+{
+  "image": "sample1.webp",
+  "review_status": "draft",
+  "connection_review_status": "approved",
+  "geometry_review_status": "draft",
+  "notes": "利用者確認: 1階の3接続は直接通行可能、2階主寝室には図面上入口なし。bboxと開口座標は元画像からの概略推定で、まだ利用者未確認。正式適用前に位置を確認する。",
+  "spaces": {
+    "R1_HALL": {"bbox": [0.209, 0.236, 0.280, 0.664]},
+    "S5": {"bbox": [0.114, 0.666, 0.209, 0.779]},
+    "S6": {"bbox": [0.114, 0.490, 0.209, 0.664]},
+    "S12": {"bbox": [0.183, 0.297, 0.233, 0.557]}
+  },
+  "connections": [
+    {
+      "space_a": "R1_HALL",
+      "space_b": "S6",
+      "boundary_relation": "door",
+      "position": [0.209, 0.610],
+      "evidence": "利用者確認済み・位置は暫定"
+    },
+    {
+      "space_a": "R1_HALL",
+      "space_b": "S12",
+      "boundary_relation": "open_passage",
+      "position": [0.233, 0.545],
+      "evidence": "利用者確認済み・位置は暫定"
+    },
+    {
+      "space_a": "S6",
+      "space_b": "S5",
+      "boundary_relation": "door",
+      "position": [0.170, 0.664],
+      "evidence": "利用者確認済み・位置は暫定"
+    }
+  ],
+  "confirmed_no_entrance": ["R2_S2"]
+}

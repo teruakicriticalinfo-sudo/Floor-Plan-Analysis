@@ -114,3 +114,21 @@ python tools/prepare_ground_truth.py --images-dir floor_sample --ground-truth-di
 ```powershell
 python tools/evaluate_benchmark.py --structure-dir backtest_results/floor_sample --ground-truth-dir ground_truth/floor_sample --model qwen3-vl_8b-instruct-q4_K_M --output backtest_results/floor_sample/benchmark.json
 ```
+
+## 位置・接続の人手補正
+
+小さな画像ではローカル8Bモデルの座標が不安定な場合があります。`manual_corrections/sample1.json` には、利用者が確認した3つの直接接続と、画像から推定した廊下・水回り・階段の位置を分けて記録しています。位置は未確認の下書きなので、通常は適用されません。次のコマンドは下書きの効果を別ファイルで試算するだけで、モデル本来の精度を示すベンチマークには含めません。
+
+`manual_corrections/sample1_review.html` をブラウザで開くと、元画像に補正候補の範囲と開口位置を重ねて確認できます。
+
+```powershell
+python tools/apply_reviewed_corrections.py --structure backtest_results/floor_sample_hall_repair/sample1__qwen3-vl_8b-instruct-q4_K_M.structure.json --corrections manual_corrections/sample1.json --output backtest_results/manual_preview/sample1.structure.json --preview-draft
+```
+
+通常のバックテストに補正を明示的に組み込む場合は `--corrections-dir manual_corrections` を付けます。下書きは自動的にスキップされ、`--preview-draft-corrections` を追加した場合だけ採点保留の別名ファイル `__manual_draft` に出力します。構造キャッシュには補正前の画像認識結果を残すので、人手補正とモデル単独の結果を区別できます。
+
+```powershell
+python live_backtest.py --input-dir floor_sample --results-dir backtest_results/manual_preview --image sample1.webp --corrections-dir manual_corrections --preview-draft-corrections
+```
+
+元画像と照合してbbox・開口座標も確認できた場合にのみ、修正JSONの `geometry_review_status` と `review_status` を `approved` に変更します。未承認データは `--preview-draft` なしでは適用できず、試算結果を採点へ渡しても採点保留になります。

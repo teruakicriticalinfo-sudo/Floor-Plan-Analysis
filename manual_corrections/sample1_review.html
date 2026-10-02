@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<title>sample1 位置補正案</title>
+<style>
+  body { font: 15px sans-serif; max-width: 930px; margin: 24px auto; color: #222; }
+  .plan { position: relative; width: 632px; height: 461px; }
+  .plan img, .plan svg { position: absolute; inset: 0; width: 632px; height: 461px; }
+  .box { fill-opacity: .12; stroke-width: 2; }
+  .point { fill: #d50000; stroke: white; stroke-width: 2; }
+  ul { line-height: 1.6; }
+</style>
+<h1>sample1 の位置補正案（未承認）</h1>
+<p>色枠は画像から推定した空間範囲、赤丸は利用者が存在を確認した3つの開口の推定位置です。位置はまだ確定していません。</p>
+<div class="plan">
+  <img src="../floor_sample/sample1.webp" width="632" height="461" alt="sample1の間取り図">
+  <svg viewBox="0 0 632 461" aria-label="補正範囲と開口位置">
+    <rect class="box" x="132" y="109" width="45" height="197" fill="#e53935" stroke="#e53935" />
+    <rect class="box" x="72" y="226" width="60" height="80" fill="#1976d2" stroke="#1976d2" />
+    <rect class="box" x="72" y="307" width="60" height="52" fill="#00acc1" stroke="#00acc1" />
+    <rect class="box" x="116" y="137" width="31" height="120" fill="#fb8c00" stroke="#fb8c00" />
+    <circle class="point" cx="132" cy="281" r="5" />
+    <circle class="point" cx="147" cy="251" r="5" />
+    <circle class="point" cx="107" cy="306" r="5" />
+  </svg>
+</div>
+<ul>
+  <li>赤枠：廊下</li>
+  <li>青枠：洗面所・脱衣所</li>
+  <li>水色枠：浴室</li>
+  <li>橙枠：階段</li>
+  <li>赤丸：廊下―洗面所、廊下―階段、洗面所―浴室の開口位置</li>
+</ul>
+<p>この補正は<a href="sample1.json">sample1.json</a>に対応します。元図面に描かれていない2階主寝室の入口は追加していません。</p>
+</html>

@@ -24,6 +24,7 @@ from floor_plan import (
     save_structure_cache,
     structure_cache_key,
 )
+from floor_plan.corrections import apply_reviewed_corrections
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -84,7 +85,11 @@ def main() -> int:
     parser.add_argument("--no-cache", action="store_true", help="キャッシュを読み書きしない")
     parser.add_argument("--refresh-cache", action="store_true", help="画像認識をやり直してキャッシュを更新する")
     parser.add_argument("--repair-fallbacks", action="store_true", help="階別読取に失敗した画像だけ、途中結果を使って廊下を再確認する")
+    parser.add_argument("--corrections-dir", type=Path, help="承認済みの画像別補正JSONを置いたフォルダ")
+    parser.add_argument("--preview-draft-corrections", action="store_true", help="未承認補正を採点保留の試算として適用する")
     args = parser.parse_args()
+    if args.preview_draft_corrections and not args.corrections_dir:
+        parser.error("--preview-draft-corrections には --corrections-dir が必要です")
 
     load_dotenv(APP_DIR / ".env")
     image_dir = resolve_app_path(args.input_dir)
@@ -124,6 +129,10 @@ def main() -> int:
         return 1
     result_dir = resolve_app_path(args.results_dir)
     result_dir.mkdir(parents=True, exist_ok=True)
+    corrections_dir = resolve_app_path(args.corrections_dir) if args.corrections_dir else None
+    if corrections_dir and not corrections_dir.is_dir():
+        print(f"ERROR: 補正フォルダがありません: {corrections_dir}", file=sys.stderr)
+        return 1
     cache_dir = APP_DIR / ".analysis_cache"
     failed = False
 
@@ -164,6 +173,22 @@ def main() -> int:
                         result.structure,
                         {"image": image_path.name, "provider": provider, "model": model, "num_ctx": ollama_num_ctx, "max_images": ollama_max_images},
                     )
+            correction_status = None
+            if corrections_dir:
+                correction_path = corrections_dir / f"{image_path.stem}.json"
+                if correction_path.is_file():
+                    corrections = json.loads(correction_path.read_text(encoding="utf-8"))
+                    if corrections.get("image") != image_path.name:
+                        raise ValueError(f"補正JSONの対象画像が一致しません: {correction_path}")
+                    if corrections.get("review_status") == "draft" and not args.preview_draft_corrections:
+                        print(f"MANUAL CORRECTION SKIPPED: 未承認 ({correction_path.name})")
+                    else:
+                        corrected = apply_reviewed_corrections(
+                            result.structure, corrections, allow_draft=args.preview_draft_corrections,
+                        )
+                        result = analyze_cached_structure(result.draft_structure, corrected, client, knowledge, model)
+                        correction_status = corrected["manual_correction_status"]
+                        print(f"MANUAL CORRECTION: {correction_status} ({correction_path.name})")
             elapsed = time.perf_counter() - started
             problems = check_response(result.report)
             print("----- DRAFT STRUCTURE -----")
@@ -192,6 +217,7 @@ def main() -> int:
                 f"- 読取パイプライン: `{PIPELINE_CACHE_VERSION}`\n"
                 f"- 知識ファイル: `knowledge.md` 全文\n\n"
                 f"- 構造キャッシュ: `{cache_status}`\n"
+                f"- 人手補正: `{correction_status or 'なし'}`\n"
                 f"- 処理時間: `{elapsed:.1f}秒`\n\n"
                 f"## 第1段階：最初の読取結果\n\n"
                 f"```json\n{json.dumps(result.draft_structure, ensure_ascii=False, indent=2)}\n```\n\n"
@@ -205,6 +231,8 @@ def main() -> int:
                 f"## 自動形式チェック\n\n{check_text}\n"
             )
             result_stem = f"{image_path.stem}__{safe_model_name(model)}"
+            if correction_status:
+                result_stem += f"__manual_{correction_status}"
             result_path = result_dir / f"{result_stem}.md"
             result_path.write_text(report, encoding="utf-8")
             structure_path = result_dir / f"{result_stem}.structure.json"
