@@ -73,6 +73,10 @@ def evaluate(structure: dict, truth: dict) -> dict:
                 for a, b in truth["connections"]}
     excluded = {edge(expected_label(a, aliases, floor_qualified), expected_label(b, aliases, floor_qualified))
                 for a, b in truth.get("excluded_connections", [])}
+    no_entrance = {expected_label(label, aliases, floor_qualified)
+                   for label in truth.get("confirmed_no_entrance", [])}
+    if any(room in connection for room in no_entrance for connection in expected):
+        raise ValueError("confirmed_no_entrance の部屋を connections に登録できません")
     predicted -= excluded
     expected -= excluded
     true_positive = predicted & expected
@@ -84,6 +88,9 @@ def evaluate(structure: dict, truth: dict) -> dict:
     return {
         "review_status": truth.get("review_status", "unspecified"),
         "excluded_count": len(excluded),
+        "confirmed_no_entrance_violations": sorted(
+            connection for connection in predicted if any(room in connection for room in no_entrance)
+        ),
         "precision": round(precision, 3), "recall": round(recall, 3), "f1": round(f1, 3),
         "true_positive": sorted(true_positive),
         "false_positive": sorted(false_positive),

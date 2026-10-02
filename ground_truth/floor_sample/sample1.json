@@ -1,7 +1,7 @@
 {
   "image": "sample1.webp",
   "review_status": "draft",
-  "notes": "画像を目視して起こした暫定データ。1階の黄色い通路を廊下として独立させた。2階LDKと主寝室の間の開口は画像解像度だけでは確定できないため採点対象外。利用者による確認後に approved に変更する。",
+  "notes": "画像を目視して起こした暫定データ。1階の黄色い通路を廊下として独立させた。利用者確認により、2階LDKと主寝室の間に扉はなく、主寝室へ入る扉自体が図面に描かれていない。本来は廊下からの入口が想定されるが、描かれていないため正解接続に追加しない。1階など残りの接続確認後に approved に変更する。",
   "floor_qualified": true,
   "ignore_space_types": [
     "storage"
@@ -16,8 +16,6 @@
     ["2F:LDK", "2F:階段"],
     ["2F:LDK", "2F:トイレ"]
   ],
-  "excluded_connections": [
-    ["2F:LDK", "2F:主寝室"]
-  ],
+  "confirmed_no_entrance": ["2F:主寝室"],
   "label_aliases": {}
 }

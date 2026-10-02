@@ -267,6 +267,7 @@ def build_topology_prompt(inventory: dict[str, Any]) -> str:
 
 注意:
 - 中央の廊下・ホールから左右の居室や水回りへ開く扉を、居室同士の直結と誤認しない。
+- 居室に入る扉が図面上どこにも描かれていない場合、図面の描き漏れもあり得る。通常あるはずという理由で扉・connectionを補わない。全周を明瞭に確認できた場合だけnegative_observationsに「屋内入口なし」を記録し、不鮮明ならunreadable_itemsへ記録する。
 - 浴室の入口は通常、隣接する洗面所・脱衣所側を重点確認する。
 - キッチン設備はLDK内ならfixtureであり、独立したconnectionを作らない。
 - opening_idは1つのconnectionにだけ使う。
@@ -730,7 +731,7 @@ def find_topology_anomalies(structure: dict[str, Any]) -> list[str]:
         if space.get("space_type") != "room":
             continue
         if not connected:
-            anomalies.append(f"{space_id}({space.get('label')})に通行可能な入口がない")
+            anomalies.append(f"{space_id}({space.get('label')})の入口が確認できない。図面の描き漏れまたは認識漏れを再確認")
             continue
         neighbor_types = {spaces[item].get("space_type") for item in connected}
         if neighbor_types.issubset({"exterior", "storage"}):
@@ -833,6 +834,7 @@ def build_verification_prompt(draft: dict[str, Any]) -> str:
 - 扉記号がある壁の両側の空間だけを接続する。近くにある別室と接続しない。
 - 玄関ホールや廊下はL字など不整形になり得る。単純なbboxだけで接続先を決めない。
 - 各居室に通常の屋内入口があるか確認する。バルコニーや収納を通らないと居室へ入れない結果は、画像に明白な根拠がない限り誤読として再確認する。
+- 居室への扉がどこにも描かれていない場合もある。図面不備の可能性として扱い、常識で廊下との扉を補わない。
 - トイレ、洗面所、浴室の扉が、玄関ホール・廊下・LDKのどれに実際に開くか、扉の円弧と壁の切れ目から確認する。
 - shared_wall_only、door、glazed_door、windowを混同しない。
 - 掃き出し窓は、通行可能ならglazed_doorとしてconnectionsに、採光可能ならwindowsにも記録する。

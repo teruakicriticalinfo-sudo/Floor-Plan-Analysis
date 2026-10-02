@@ -47,6 +47,23 @@ class GroundTruthEvaluationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             expected_label("LDK", {}, True)
 
+    def test_confirmed_missing_entrance_flags_invented_connection(self):
+        structure = {
+            "spaces": [
+                {"id": "living", "label": "LDK", "space_type": "room", "floor_id": "2F"},
+                {"id": "bedroom", "label": "主寝室", "space_type": "room", "floor_id": "2F"},
+            ],
+            "connections": [
+                {"space_a": "living", "space_b": "bedroom", "traversable": True, "validation_status": "accepted"},
+            ],
+        }
+        truth = {"floor_qualified": True, "connections": [], "confirmed_no_entrance": ["2F:主寝室"]}
+        result = evaluate(structure, truth)
+        self.assertEqual(result["confirmed_no_entrance_violations"], [("2F:LDK", "2F:主寝室")])
+        self.assertEqual(result["false_positive"], [("2F:LDK", "2F:主寝室")])
+        with self.assertRaises(ValueError):
+            evaluate(structure, {**truth, "connections": [["2F:LDK", "2F:主寝室"]]})
+
 
 if __name__ == "__main__":
     unittest.main()

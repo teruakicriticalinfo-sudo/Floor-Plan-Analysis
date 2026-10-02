@@ -95,7 +95,7 @@ python tools/prepare_ground_truth.py --images-dir floor_sample --ground-truth-di
 
 各 `ground_truth/floor_sample/*.json` の `connections` を元画像と照合して修正し、確認を終えたファイルだけ `review_status` を `approved` に変更します。未確認の下書きは集計対象になりません。
 
-複数階で同じ部屋名がある場合は、`floor_qualified: true` として接続の両端を `1F:廊下`、`2F:LDK` のように階付きで記録できます。画像だけでは判定できない接続は `excluded_connections` に記録すると採点から除外されます。`sample1.json` は目視した暫定下書きで、利用者が接続を確認するまでは `draft` のままです。単体の暫定比較には `python tools/evaluate_ground_truth.py <structure.json> <ground_truth.json>` を使用します。
+複数階で同じ部屋名がある場合は、`floor_qualified: true` として接続の両端を `1F:廊下`、`2F:LDK` のように階付きで記録できます。画像だけでは判定できない接続は `excluded_connections` に記録すると採点から除外されます。図面に入口がないことを確認した居室は `confirmed_no_entrance` に記録すると、その部屋へ架空の接続を作った結果を検出できます。`sample1.json` の2階主寝室は図面上に入口が描かれていないと利用者が確認済みですが、他の接続はまだ暫定下書きのため `draft` のままです。単体の暫定比較には `python tools/evaluate_ground_truth.py <structure.json> <ground_truth.json>` を使用します。
 
 先に構造JSONなしでテンプレートを作成していた場合は、分析後に次のように `--overwrite` を付けて実行すると、AIの採用接続を下書きに入れ直せます。人手で修正を始めた後は上書きしません。
 
