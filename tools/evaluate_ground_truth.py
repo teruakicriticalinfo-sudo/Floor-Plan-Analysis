@@ -35,8 +35,18 @@ def edge(first: str, second: str) -> tuple[str, str]:
     return tuple(sorted((first, second)))
 
 
+def expected_label(label: str, aliases: dict[str, str], floor_qualified: bool) -> str:
+    if not floor_qualified:
+        return canonical(label, aliases)
+    floor_id, separator, room_label = str(label).partition(":")
+    if not separator or not floor_id or not room_label:
+        raise ValueError(f"階付きの接続名が必要です: {label}")
+    return f"{floor_id}:{canonical(room_label, aliases)}"
+
+
 def evaluate(structure: dict, truth: dict) -> dict:
     aliases = truth.get("label_aliases", {})
+    floor_qualified = truth.get("floor_qualified", False)
     spaces = {item["id"]: item for item in structure["spaces"]}
     ignored_types = set(truth.get("ignore_space_types", []))
     predicted = set()
@@ -52,11 +62,19 @@ def evaluate(structure: dict, truth: dict) -> dict:
             continue
         first_label = canonical_space(first, aliases)
         second_label = canonical_space(second, aliases)
+        if floor_qualified:
+            first_label = f"{first.get('floor_id', 'unknown')}:{first_label}"
+            second_label = f"{second.get('floor_id', 'unknown')}:{second_label}"
         if first_label == second_label:
             continue
         predicted.add(edge(first_label, second_label))
 
-    expected = {edge(canonical(a, aliases), canonical(b, aliases)) for a, b in truth["connections"]}
+    expected = {edge(expected_label(a, aliases, floor_qualified), expected_label(b, aliases, floor_qualified))
+                for a, b in truth["connections"]}
+    excluded = {edge(expected_label(a, aliases, floor_qualified), expected_label(b, aliases, floor_qualified))
+                for a, b in truth.get("excluded_connections", [])}
+    predicted -= excluded
+    expected -= excluded
     true_positive = predicted & expected
     false_positive = predicted - expected
     false_negative = expected - predicted
@@ -64,6 +82,8 @@ def evaluate(structure: dict, truth: dict) -> dict:
     recall = len(true_positive) / len(expected) if expected else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
     return {
+        "review_status": truth.get("review_status", "unspecified"),
+        "excluded_count": len(excluded),
         "precision": round(precision, 3), "recall": round(recall, 3), "f1": round(f1, 3),
         "true_positive": sorted(true_positive),
         "false_positive": sorted(false_positive),

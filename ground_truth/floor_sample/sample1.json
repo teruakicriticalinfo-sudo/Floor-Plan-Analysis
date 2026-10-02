@@ -1,10 +1,23 @@
 {
   "image": "sample1.webp",
-  "review_status": "pending",
-  "notes": "画像を見て、収納を除く直接通行可能な接続だけを connections に記入してください。",
+  "review_status": "draft",
+  "notes": "画像を目視して起こした暫定データ。1階の黄色い通路を廊下として独立させた。2階LDKと主寝室の間の開口は画像解像度だけでは確定できないため採点対象外。利用者による確認後に approved に変更する。",
+  "floor_qualified": true,
   "ignore_space_types": [
     "storage"
   ],
-  "connections": [],
+  "connections": [
+    ["1F:玄関", "1F:廊下"],
+    ["1F:廊下", "1F:洋室"],
+    ["1F:廊下", "1F:階段"],
+    ["1F:廊下", "1F:洗面所"],
+    ["1F:廊下", "1F:トイレ"],
+    ["1F:洗面所", "1F:浴室"],
+    ["2F:LDK", "2F:階段"],
+    ["2F:LDK", "2F:トイレ"]
+  ],
+  "excluded_connections": [
+    ["2F:LDK", "2F:主寝室"]
+  ],
   "label_aliases": {}
 }
