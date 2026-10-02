@@ -56,6 +56,16 @@ CROPPED_INVENTORY_SCHEMA = {
     "properties": {"spaces": STRUCTURE_JSON_SCHEMA["properties"]["spaces"]},
 }
 
+HALL_PROBE_SCHEMA = {
+    "type": "object", "required": ["separate_hall", "bbox", "confidence", "evidence"],
+    "properties": {
+        "separate_hall": {"type": "boolean"},
+        "bbox": {"type": ["array", "null"], "items": {"type": "number"}},
+        "confidence": {"type": "string"},
+        "evidence": {"type": "string"},
+    },
+}
+
 TOPOLOGY_OBSERVATION_SCHEMA = {
     "type": "object",
     "required": ["openings", "connections", "windows", "fixtures", "negative_observations", "unreadable_items"],
@@ -229,6 +239,29 @@ def build_cropped_inventory_prompt(floor_id: str) -> str:
 space_typeはroom、hall、sanitary、storage、exterior、vertical_circulation、otherのいずれか1語だけにします。候補を縦線で連結しないでください。
 図面全体を1部屋のbboxとして返さず、壁で区切られた部屋を個別に列挙してください。
 """.strip()
+
+
+def build_hall_probe_prompt(floor_id: str, spaces: list[dict[str, Any]]) -> str:
+    labels = [f"{space.get('id')}: {space.get('label')}" for space in spaces]
+    return f"""
+これは{floor_id}だけの間取り図です。既存の部屋一覧に、通行用の廊下・ホールが抜けていないか画像を確認してください。
+既存の部屋: {', '.join(labels)}
+玄関の土間・靴脱ぎ部分と、そこから居室・水回り・階段へ分岐する細長い共用動線を分けて見てください。通路に文字ラベルや玄関との扉がなくても、壁の配置、細長い形、床色の違いで動線部分を特定できればseparate_hallをtrueにします。階段と一体のオープンな通路でも構いません。
+玄関の中だけ、階段の踏み面だけ、またはLDK内の通路ならfalseにしてください。一般的な住宅なら廊下があるはず、という推測はしないでください。
+trueの場合のbboxは、この切出し画像の左上[0,0]、右下[1,1]に正規化した通路全体の外接矩形です。confidenceはhigh、medium、lowのいずれかです。
+見分けられなければfalse、bboxはnull、confidenceはlowにしてください。evidenceは図面上で見えた根拠を短く記録してください。
+separate_hall、bbox、confidence、evidenceの4項目だけをJSONで返してください。
+""".strip()
+
+
+def _valid_hall_probe(value: Any) -> bool:
+    if not isinstance(value, dict) or value.get("separate_hall") is not True:
+        return False
+    bbox = value.get("bbox")
+    if not _valid_normalized_coordinates(bbox, 4) or value.get("confidence") != "high":
+        return False
+    x1, y1, x2, y2 = bbox
+    return x1 < x2 and y1 < y2 and (x2 - x1) * (y2 - y1) < 0.5 and bool(str(value.get("evidence") or "").strip())
 
 
 def _valid_cropped_inventory(value: Any, expected_count: int) -> bool:
@@ -527,6 +560,11 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
             reasons.append("収納・水回りと屋外の直結は要画像再確認")
         if traversable and types == {"storage"}:
             reasons.append("収納同士を通行経路にしている")
+        if traversable and types == {"storage", "hall"} and any(
+            space.get("id", "").endswith("_HALL") and space.get("floor_id") in enriched.get("floor_hall_recoveries", [])
+            for space in (space_a, space_b)
+        ):
+            reasons.append("補完した廊下の位置が概略のため収納への扉は要画像確認")
         if traversable and types in ({"storage", "sanitary"}, {"storage", "vertical_circulation"}):
             reasons.append("収納と水回り・階段の直結は要画像再確認")
         if traversable and "storage" in types and "屋根裏" in labels and "vertical_circulation" not in types:
@@ -950,6 +988,8 @@ def extract_floor_plan_structure(
     if split:
         refined_spaces = []
         fallbacks = []
+        hall_recoveries = []
+        floor_repair_attempts = []
         for index, region in enumerate(regions, 1):
             if progress:
                 progress(f"1/4 部屋の位置を再読取中（領域 {index}/{len(regions)}）")
@@ -981,9 +1021,43 @@ def extract_floor_plan_structure(
                 else:
                     remember(stage, local)
             if fallback:
+                floor_repair_attempts.append(region["floor_id"])
                 originals = [deepcopy(space) for space in inventory["spaces"] if space.get("floor_id") == region["floor_id"]]
                 if not originals:
                     raise RuntimeError(f"{region['floor_id']}の部屋一覧を読めません。")
+                has_hall = any("廊下" in str(space.get("label", "")) or "ホール" in str(space.get("label", ""))
+                               for space in originals)
+                if not has_hall:
+                    probe_stage = f"hall_probe_v2_{index}"
+                    probe = deepcopy(stage_data.get(probe_stage))
+                    if probe is None:
+                        if progress:
+                            progress(f"1/4 廊下候補を再確認中（領域 {index}/{len(regions)}）")
+                        response = _generate_with_retry(
+                            client, model=model,
+                            contents=build_visual_contents(build_hall_probe_prompt(region["floor_id"], originals), cropped),
+                            config={"response_mime_type": "application/json", "response_json_schema": HALL_PROBE_SCHEMA, "temperature": 0},
+                        )
+                        probe = _parse_or_repair_json_object(
+                            _response_text(response, "廊下の再確認"), client, model,
+                            "廊下の再確認", HALL_PROBE_SCHEMA,
+                        )
+                        remember(probe_stage, probe)
+                    if _valid_hall_probe(probe):
+                        hall_id = f"R{index}_HALL"
+                        if hall_id not in {space["id"] for space in originals}:
+                            bbox = probe["bbox"]
+                            originals.append({
+                                "id": hall_id, "label": "廊下", "space_type": "hall", "floor_id": region["floor_id"],
+                                "bbox": _map_point(bbox[:2], region, to_global=True)
+                                        + _map_point(bbox[2:], region, to_global=True),
+                                "confidence": "high", "evidence": probe["evidence"],
+                            })
+                            hall_recoveries.append(region["floor_id"])
+                            integration_stage = f"hall_probe_integrated_v2_{index}"
+                            if not stage_data.get(integration_stage):
+                                stage_data.pop(f"topology_{index}", None)
+                                remember(integration_stage, {"status": "integrated"})
                 refined_spaces.extend(originals)
                 fallbacks.append(region["floor_id"])
                 remember(f"fallback_{index}", {"reason": "階別の部屋再読取が不完全"})
@@ -1000,11 +1074,15 @@ def extract_floor_plan_structure(
                 refined_spaces.append(space)
         inventory["spaces"] = refined_spaces
         inventory["floor_reading_fallbacks"] = fallbacks
+        inventory["floor_hall_recoveries"] = hall_recoveries
+        inventory["floor_repair_attempts"] = floor_repair_attempts
     provisional = {
         "image_quality": inventory.get("image_quality"),
         "orientation": inventory.get("orientation"),
         "plan_regions": inventory.get("plan_regions"),
         "floor_reading_fallbacks": inventory.get("floor_reading_fallbacks", []),
+        "floor_hall_recoveries": inventory.get("floor_hall_recoveries", []),
+        "floor_repair_attempts": inventory.get("floor_repair_attempts", []),
         "spaces": inventory.get("spaces"),
         "openings": [], "connections": [], "windows": [], "fixtures": [],
         "negative_observations": [], "unreadable_items": [],
@@ -1283,7 +1361,13 @@ def analyze_from_structure(
     quality = structure.get("verified_topology", {}).get("connection_quality", {})
     hold_reasons = []
     if structure.get("floor_reading_fallbacks"):
-        hold_reasons.append(f"{', '.join(structure['floor_reading_fallbacks'])}の階別部屋再読取が失敗し、初回の部屋一覧を使用")
+        if structure.get("floor_hall_recoveries"):
+            hold_reasons.append(
+                f"{', '.join(structure['floor_reading_fallbacks'])}の階別部屋再読取が失敗。"
+                "廊下候補のみ追加したが、位置は概略で他の部屋は初回の一覧を使用"
+            )
+        else:
+            hold_reasons.append(f"{', '.join(structure['floor_reading_fallbacks'])}の階別部屋再読取が失敗し、初回の部屋一覧を使用")
     if (structure.get("image_quality", {}).get("level") == "high"
             and len(structure.get("spaces", [])) >= 3
             and not structure.get("windows") and not structure.get("fixtures")):

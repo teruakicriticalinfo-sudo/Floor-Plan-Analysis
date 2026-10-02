@@ -71,6 +71,12 @@ python live_backtest.py --no-cache
 
 採点用JSONは、検証済み構造からbbox、扉座標、拒否済み接続、冗長な画像根拠を除いた圧縮形式です。元の完全な構造JSONは結果ファイルとキャッシュに保持されます。
 
+階別の部屋再読取に失敗した画像だけを部分修復するには、次のように実行します。保存済みの途中結果があれば他の階と窓・設備の画像認識を再利用し、失敗した階の廊下候補と扉・接続だけを再確認します。廊下候補のbboxは概略なので、階全体の再読取が成功するまでは採点保留のままです。通常の再実行では完成済み構造キャッシュを使い、画像認識は省略します。
+
+```powershell
+python live_backtest.py --input-dir floor_sample --results-dir backtest_results/floor_sample --image sample1.webp --repair-fallbacks
+```
+
 正解データとの接続精度は次で測定できます。
 
 ```powershell

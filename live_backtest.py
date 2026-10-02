@@ -83,6 +83,7 @@ def main() -> int:
     )
     parser.add_argument("--no-cache", action="store_true", help="キャッシュを読み書きしない")
     parser.add_argument("--refresh-cache", action="store_true", help="画像認識をやり直してキャッシュを更新する")
+    parser.add_argument("--repair-fallbacks", action="store_true", help="階別読取に失敗した画像だけ、途中結果を使って廊下を再確認する")
     args = parser.parse_args()
 
     load_dotenv(APP_DIR / ".env")
@@ -133,12 +134,20 @@ def main() -> int:
             key = structure_cache_key(image_path.read_bytes(), provider, model, ollama_num_ctx, ollama_max_images)
             cache_path = cache_dir / f"{key}.json"
             cached = None if args.no_cache or args.refresh_cache else load_structure_cache(cache_path)
+            pending_floors = set(cached[0].get("floor_reading_fallbacks", [])) - set(
+                cached[0].get("floor_repair_attempts", [])
+            ) - set(cached[0].get("floor_hall_recoveries", [])) if cached else set()
+            repairing = bool(args.repair_fallbacks and pending_floors)
+            if repairing:
+                print("CACHE REPAIR: 階別読取の失敗箇所を途中結果から再確認")
+                cached = None
             if cached:
                 print(f"CACHE HIT: 画像認識を省略 ({cache_path.name})")
                 result = analyze_cached_structure(cached[0], cached[1], client, knowledge, model)
                 cache_status = "hit"
             else:
-                print("CACHE MISS: 画像認識を実行")
+                if not repairing:
+                    print("CACHE MISS: 画像認識を実行")
                 with Image.open(image_path) as source:
                     image = ImageOps.exif_transpose(source).convert("RGB")
                 result = analyze_floor_plan(
@@ -147,7 +156,7 @@ def main() -> int:
                     checkpoint_path=None if args.no_cache else cache_path.with_suffix(".stages.json"),
                     resume_checkpoint=not args.refresh_cache,
                 )
-                cache_status = "disabled" if args.no_cache else "miss"
+                cache_status = "disabled" if args.no_cache else "repair" if repairing else "miss"
                 if not args.no_cache:
                     save_structure_cache(
                         cache_path,

@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from floor_plan import (
+    PIPELINE_CACHE_VERSION,
     SCORE_CRITERIA,
     analyze_cached_structure,
     analyze_floor_plan,
@@ -26,6 +27,7 @@ from floor_plan.analyzer import (
     TOPOLOGY_OBSERVATION_SCHEMA, _parse_or_repair_json_object,
     add_verified_topology, discard_invalid_observations, extract_floor_plan_structure, normalize_plan_regions,
     _valid_cropped_inventory,
+    _valid_hall_probe,
 )
 
 
@@ -248,6 +250,73 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
                               "space_type": "room|hall|sanitary|storage|exterior|vertical_circulation|other",
                               "bbox": [0, 0, 1, 1]}]}
         self.assertFalse(_valid_cropped_inventory(copied, expected_count=7))
+
+    def test_failed_floor_inventory_recovers_hall_from_checkpoint(self):
+        class FakeImage:
+            size = (100, 100)
+
+            def crop(self, box):
+                return self
+
+            def resize(self, size, _resampling):
+                return self
+
+        inventory = {
+            "image_quality": {"level": "high", "notes": []}, "orientation": {"value": None},
+            "plan_regions": [{"floor_id": "1F", "bbox": [0, 0, 0.5, 1]},
+                             {"floor_id": "2F", "bbox": [0.5, 0, 1, 1]}],
+            "spaces": [
+                {"id": "S1", "label": "玄関", "space_type": "hall", "floor_id": "1F", "bbox": [0.2, 0.6, 0.3, 0.8]},
+                {"id": "S2", "label": "洋室", "space_type": "room", "floor_id": "1F", "bbox": [0.2, 0.1, 0.45, 0.6]},
+                {"id": "S3", "label": "階段", "space_type": "vertical_circulation", "floor_id": "1F", "bbox": [0.1, 0.2, 0.2, 0.6]},
+                {"id": "S4", "label": "LDK", "space_type": "room", "floor_id": "2F", "bbox": [0.6, 0.1, 0.9, 0.8]},
+            ],
+        }
+        blank = {"openings": [], "connections": [], "windows": [], "fixtures": [],
+                 "negative_observations": [], "unreadable_items": []}
+        features = {"windows": [], "fixtures": [], "unreadable_items": []}
+        stages = {
+            "inventory": inventory, "fallback_1": {"reason": "階別の部屋再読取が不完全"},
+            "region_inventory_2": {"spaces": [{"id": "S1", "label": "LDK", "space_type": "room", "bbox": [0.2, 0.1, 0.8, 0.8]}]},
+            "topology_1": blank, "topology_2": blank, "features_1": features, "features_2": features,
+        }
+        probe = {"separate_hall": True, "bbox": [0.3, 0.2, 0.5, 0.8],
+                 "confidence": "high", "evidence": "玄関と階段の間の黄色い通路"}
+        client = FakeClient(json.dumps(probe, ensure_ascii=False), json.dumps(blank, ensure_ascii=False))
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "stages.json"
+            checkpoint.write_text(json.dumps({"pipeline_version": PIPELINE_CACHE_VERSION, "stages": stages}), encoding="utf-8")
+            extracted = extract_floor_plan_structure(FakeImage(), client, "test-model", checkpoint_path=checkpoint)
+            repeated_client = FakeClient()
+            repeated = extract_floor_plan_structure(FakeImage(), repeated_client, "test-model", checkpoint_path=checkpoint)
+        self.assertEqual(extracted, repeated)
+        self.assertEqual(extracted["floor_hall_recoveries"], ["1F"])
+        self.assertEqual(extracted["floor_repair_attempts"], ["1F"])
+        self.assertEqual(extracted["floor_reading_fallbacks"], ["1F"])
+        self.assertIn("R1_HALL", {space["id"] for space in extracted["spaces"]})
+        self.assertEqual(len(client.models.calls), 2)
+        self.assertEqual(len(repeated_client.models.calls), 0)
+
+    def test_hall_probe_requires_clear_visual_evidence(self):
+        self.assertFalse(_valid_hall_probe({"separate_hall": True, "bbox": [0.1, 0.1, 0.3, 0.3],
+                                            "confidence": "low", "evidence": "maybe"}))
+        self.assertFalse(_valid_hall_probe({"separate_hall": True, "bbox": [0, 0, 1, 1],
+                                            "confidence": "high", "evidence": "whole plan"}))
+
+    def test_recovered_hall_does_not_verify_storage_door_from_approximate_bbox(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"] = [
+            {"id": "R1_HALL", "label": "廊下", "space_type": "hall", "floor_id": "1F", "bbox": [0.1, 0.1, 0.3, 0.4]},
+            {"id": "S2", "label": "クローゼット", "space_type": "storage", "floor_id": "1F", "bbox": [0.3, 0.1, 0.5, 0.4]},
+        ]
+        structure["openings"] = [{"id": "O1", "opening_type": "door", "position": [0.3, 0.2], "confidence": "high"}]
+        structure["connections"] = [{"id": "C1", "opening_id": "O1", "space_a": "R1_HALL", "space_b": "S2",
+                                     "boundary_relation": "door", "traversable": True, "position": [0.3, 0.2], "confidence": "high"}]
+        self.assertEqual(len(add_verified_topology(structure)["verified_topology"]["direct_connections"]), 1)
+        structure["floor_hall_recoveries"] = ["1F"]
+        checked = add_verified_topology(structure)
+        self.assertEqual(checked["verified_topology"]["direct_connections"], [])
+        self.assertIn("位置が概略", checked["connections"][0]["validation_reasons"][0])
 
     def test_cropped_inventory_fallback_holds_score(self):
         structure = add_verified_topology(VALID_STRUCTURE)
