@@ -6,11 +6,11 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 DEFAULT_MODEL = "qwen3-vl:4b-instruct"
-PIPELINE_CACHE_VERSION = "floor-aware-topology-v4"
+PIPELINE_CACHE_VERSION = "floor-regions-refined-v6"
 
 SCORE_CRITERIA = (
     ("生活動線", 15, "帰宅、家事、来客、各室間の移動に無駄や交錯がないか"),
@@ -29,11 +29,12 @@ STRUCTURE_JSON_SCHEMA = {
     "properties": {
         "image_quality": {"type": "object"},
         "orientation": {"type": "object"},
+        "plan_regions": {"type": "array", "items": {"type": "object", "required": ["floor_id", "bbox"], "properties": {"floor_id": {"type": "string"}, "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}}}}},
         "spaces": {"type": "array", "items": {"type": "object", "required": ["id", "label", "space_type", "bbox", "confidence"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "space_type": {"type": "string"}, "floor_id": {"type": ["string", "null"]}, "area_text": {"type": ["string", "null"]}, "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "openings": {"type": "array", "items": {"type": "object", "required": ["id", "opening_type", "position", "confidence"], "properties": {"id": {"type": "string"}, "opening_type": {"type": "string"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "connections": {"type": "array", "items": {"type": "object", "required": ["id", "opening_id", "space_a", "space_b", "boundary_relation", "traversable", "position", "confidence"], "properties": {"id": {"type": "string"}, "opening_id": {"type": "string"}, "space_a": {"type": "string"}, "space_b": {"type": "string"}, "boundary_relation": {"type": "string"}, "traversable": {"type": "boolean"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
-        "windows": {"type": "array", "items": {"type": "object"}},
-        "fixtures": {"type": "array", "items": {"type": "object"}},
+        "windows": {"type": "array", "items": {"type": "object", "required": ["id", "space_id", "position", "confidence"], "properties": {"id": {"type": "string"}, "space_id": {"type": "string"}, "faces_exterior": {"type": "boolean"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
+        "fixtures": {"type": "array", "items": {"type": "object", "required": ["space_id", "fixture", "confidence"], "properties": {"space_id": {"type": "string"}, "fixture": {"type": "string"}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "negative_observations": {"type": "array", "items": {"type": "object"}},
         "unreadable_items": {"type": "array", "items": {"type": "string"}},
     },
@@ -41,12 +42,18 @@ STRUCTURE_JSON_SCHEMA = {
 
 SPACE_INVENTORY_SCHEMA = {
     "type": "object",
-    "required": ["image_quality", "orientation", "spaces"],
+    "required": ["image_quality", "orientation", "spaces", "plan_regions"],
     "properties": {
         "image_quality": STRUCTURE_JSON_SCHEMA["properties"]["image_quality"],
         "orientation": STRUCTURE_JSON_SCHEMA["properties"]["orientation"],
+        "plan_regions": STRUCTURE_JSON_SCHEMA["properties"]["plan_regions"],
         "spaces": STRUCTURE_JSON_SCHEMA["properties"]["spaces"],
     },
+}
+
+CROPPED_INVENTORY_SCHEMA = {
+    "type": "object", "required": ["spaces"],
+    "properties": {"spaces": STRUCTURE_JSON_SCHEMA["properties"]["spaces"]},
 }
 
 TOPOLOGY_OBSERVATION_SCHEMA = {
@@ -55,6 +62,15 @@ TOPOLOGY_OBSERVATION_SCHEMA = {
     "properties": {
         key: STRUCTURE_JSON_SCHEMA["properties"][key]
         for key in ("openings", "connections", "windows", "fixtures", "negative_observations", "unreadable_items")
+    },
+}
+
+FEATURE_SCHEMA = {
+    "type": "object", "required": ["windows", "fixtures", "unreadable_items"],
+    "properties": {
+        "windows": STRUCTURE_JSON_SCHEMA["properties"]["windows"],
+        "fixtures": STRUCTURE_JSON_SCHEMA["properties"]["fixtures"],
+        "unreadable_items": STRUCTURE_JSON_SCHEMA["properties"]["unreadable_items"],
     },
 }
 
@@ -192,12 +208,44 @@ def build_space_inventory_prompt() -> str:
 - 上下など離れたバルコニーは別々のexterior空間にする。
 - CL、押入などの収納も個別のstorage空間にする。
 - 複数階が同一画像にある場合は、1階・2階などの図面ごとにfloor_idを分ける。階段はvertical_circulationとして登録する。
+- 最初に独立した平面図ごとのplan_regionsを作る。1階平面図・2階平面図の印字からfloor_idを読み、図面全体をbboxで囲む。単一図面ならplan_regionsは1件、階が読めなければfloor_idは"unknown"。小さな屋根裏収納などの付属図は独立した階と断定しない。
+- 各spaceのfloor_idは所属するplan_regionsのfloor_idと一致させる。図面の位置だけから階数を推測しない。
 - 読めない空間を推測で作らない。bboxは文字だけでなく壁で囲まれた領域全体を示す。
 
 JSON形式:
-{"image_quality":{"level":"high|medium|low","notes":[]},"orientation":{"value":null,"confidence":"high|medium|low","evidence":"..."},"spaces":[{"id":"S1","label":"LDK","space_type":"room|hall|storage|sanitary|exterior|vertical_circulation|other","floor_id":"1F|null","area_text":"14.5帖|null","bbox":[0,0,1,1],"confidence":"high|medium|low","evidence":"..."}]}
+{"image_quality":{"level":"high|medium|low","notes":[]},"orientation":{"value":null,"confidence":"high|medium|low","evidence":"..."},"plan_regions":[{"floor_id":"1F","bbox":[0,0,0.5,1]},{"floor_id":"2F","bbox":[0.5,0,1,1]}],"spaces":[{"id":"S1","label":"LDK","space_type":"room|hall|storage|sanitary|exterior|vertical_circulation|other","floor_id":"1F|null","area_text":"14.5帖|null","bbox":[0,0,1,1],"confidence":"high|medium|low","evidence":"..."}]}
 JSON以外は返さない。
 """.strip()
+
+
+def build_cropped_inventory_prompt(floor_id: str) -> str:
+    return f"""
+これは{floor_id}の平面図だけを切り出した画像です。この図面の壁で区切られた空間を、画像を直接見て列挙してください。
+特に玄関と居室を分ける廊下・ホール、浴室・洗面所・トイレ、階段、収納を正しい位置と大きさで登録してください。
+外部に離して描かれた収納小図を、LDKに接する部屋として広げてはいけません。
+各bboxはこの切出し画像の左上[0,0]、右下[1,1]に正規化します。文字の位置ではなく、壁に囲まれた空間の外形です。
+読めない空間は推測せず省略します。扉や接続、評価はまだ扱いません。
+返答はspaces配列を持つJSONオブジェクトだけにしてください。各要素はid、label、space_type、bbox、confidence、evidenceを持ちます。
+space_typeはroom、hall、sanitary、storage、exterior、vertical_circulation、otherのいずれか1語だけにします。候補を縦線で連結しないでください。
+図面全体を1部屋のbboxとして返さず、壁で区切られた部屋を個別に列挙してください。
+""".strip()
+
+
+def _valid_cropped_inventory(value: Any, expected_count: int) -> bool:
+    spaces = value.get("spaces") if isinstance(value, dict) else None
+    if not isinstance(spaces, list) or not spaces:
+        return False
+    if expected_count >= 3 and len(spaces) < 2:
+        return False
+    allowed_types = {"room", "hall", "sanitary", "storage", "exterior", "vertical_circulation", "other"}
+    ids = [item.get("id") for item in spaces if isinstance(item, dict)]
+    return (
+        len(ids) == len(spaces) and len(ids) == len(set(ids))
+        and all(item.get("id") and item.get("space_type") in allowed_types
+                and _valid_normalized_coordinates(item.get("bbox"), 4)
+                and item["bbox"][0] < item["bbox"][2] and item["bbox"][1] < item["bbox"][3]
+                for item in spaces)
+    )
 
 
 def build_topology_prompt(inventory: dict[str, Any]) -> str:
@@ -210,7 +258,7 @@ def build_topology_prompt(inventory: dict[str, Any]) -> str:
 1. 扉の円弧、引戸線、壁の切れ目、掃き出し窓をopeningsへ重複なく登録する。
 2. 各opening.positionの両側にあるspace IDを、bboxだけでなく壁の形状も見て決める。
 3. 対応できるopeningだけconnectionsへ登録する。不明なら接続を推測せずunreadable_itemsへ記録する。
-4. 窓、設備、明確な不存在も記録する。
+4. 窓と設備は後の専用工程で読むため、windowsとfixturesは空配列にする。明確な不存在だけ記録する。
 
 出力を短く保つ:
 - 指定されたキー以外は出力しない。evidenceは12文字以内、unreadable_itemsは1項目20文字以内にする。
@@ -223,11 +271,24 @@ def build_topology_prompt(inventory: dict[str, Any]) -> str:
 - キッチン設備はLDK内ならfixtureであり、独立したconnectionを作らない。
 - opening_idは1つのconnectionにだけ使う。
 - floor_idが異なるspace同士を直接接続してはいけない。階段（vertical_circulation）を介する場合だけ、同じ階のspaceと階段を接続する。
+- 窓と設備はこの段階で出力しない。後の専用工程で再確認する。
 
 【確定済み空間一覧】
 {json.dumps(inventory["spaces"], ensure_ascii=False, separators=(',', ':'))}
 
 openings, connections, windows, fixtures, negative_observations, unreadable_itemsを含むJSONだけを返す。
+""".strip()
+
+
+def build_feature_prompt(inventory: dict[str, Any]) -> str:
+    return f"""
+この間取り図に実際に描かれた窓と住宅設備だけを、画像を再確認してJSONで列挙してください。
+扉・接続・部屋の再判定や採点は不要です。窓の細線、開口と外壁、キッチンのシンクとコンロ、トイレ便器、浴槽、洗面台を重点確認してください。
+見えないものは推測しません。画像で判別できない項目はunreadable_itemsに記録してください。
+各窓はid, space_id, faces_exterior, position, confidence, evidenceを持ち、各設備はspace_id, fixture, confidence, evidenceを持ちます。
+座標はこの画像の左上[0,0]、右下[1,1]です。IDは以下の空間一覧だけを使用してください。
+【空間一覧】{json.dumps(inventory['spaces'], ensure_ascii=False, separators=(',', ':'))}
+{{"windows":[],"fixtures":[],"unreadable_items":[]}} の形式のJSONだけ返してください。
 """.strip()
 
 
@@ -292,6 +353,14 @@ def parse_structure_response(text: str) -> dict[str, Any]:
             raise RuntimeError(f"接続関係が未定義の扉・開口を参照しています: {connection.get('opening_id')}")
         if not _valid_normalized_coordinates(connection.get("position"), 2):
             raise RuntimeError(f"接続{connection.get('id')}のpositionが不正です。")
+    for window in structure["windows"]:
+        if not isinstance(window, dict) or window.get("space_id") not in known_ids:
+            raise RuntimeError("窓が未定義の空間を参照しています。")
+        if not window.get("id") or not _valid_normalized_coordinates(window.get("position"), 2):
+            raise RuntimeError("窓のIDまたは座標が不正です。")
+    for fixture in structure["fixtures"]:
+        if not isinstance(fixture, dict) or fixture.get("space_id") not in known_ids:
+            raise RuntimeError("設備が未定義の空間を参照しています。")
     return structure
 
 
@@ -301,6 +370,92 @@ def _valid_normalized_coordinates(value: Any, length: int) -> bool:
         and len(value) == length
         and all(isinstance(item, (int, float)) and not isinstance(item, bool) and 0 <= item <= 1 for item in value)
     )
+
+
+def normalize_plan_regions(inventory: dict[str, Any]) -> dict[str, Any]:
+    """Assign a floor only when a labelled drawing region contains the space."""
+    result = deepcopy(inventory)
+    regions = result.get("plan_regions")
+    if not isinstance(regions, list) or not regions:
+        raise RuntimeError("図面領域plan_regionsを読めません。階を特定してから採点してください。")
+    def canonical(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        normalized = value.translate(str.maketrans("０１２３４５６７８９", "0123456789")).strip()
+        match = re.fullmatch(r"([0-9]+)\s*(?:F|階)(?:平面図)?", normalized, re.IGNORECASE)
+        return f"{match.group(1)}F" if match else normalized
+
+    for region in regions:
+        if isinstance(region, dict):
+            region["floor_id"] = canonical(region.get("floor_id"))
+        bbox = region.get("bbox") if isinstance(region, dict) else None
+        if not _valid_normalized_coordinates(bbox, 4) or bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
+            raise RuntimeError("plan_regionsのbboxが不正です。")
+    multiple = len(regions) > 1
+    if multiple and len({region.get("floor_id") for region in regions}) != len(regions):
+        raise RuntimeError("複数の図面領域の階識別が重複または欠落しています。")
+    for space in result.get("spaces", []):
+        space["floor_id"] = canonical(space.get("floor_id"))
+        bbox = space.get("bbox", [])
+        if not _valid_normalized_coordinates(bbox, 4):
+            continue
+        center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+        matching = [region for region in regions if region["bbox"][0] <= center[0] <= region["bbox"][2]
+                    and region["bbox"][1] <= center[1] <= region["bbox"][3]]
+        if multiple and len(matching) != 1:
+            raise RuntimeError(f"{space.get('id')}の所属階が一意に決まりません。")
+        if matching:
+            identified = matching[0].get("floor_id")
+            if multiple and (not identified or identified in {"unknown", "不明", "null"}):
+                raise RuntimeError(f"{space.get('id')}の階を読めません。採点を停止します。")
+            if space.get("floor_id") not in (None, "", "unknown", "不明", identified):
+                raise RuntimeError(f"{space.get('id')}の階指定が図面領域と矛盾しています。")
+            space["floor_id"] = identified
+    return result
+
+
+def _map_point(point: list[float], region: dict[str, Any], *, to_global: bool) -> list[float]:
+    x1, y1, x2, y2 = region["bbox"]
+    if to_global:
+        return [round(x1 + point[0] * (x2 - x1), 5), round(y1 + point[1] * (y2 - y1), 5)]
+    return [round((point[0] - x1) / (x2 - x1), 5), round((point[1] - y1) / (y2 - y1), 5)]
+
+
+def _crop_floor_region(image: Any, region: dict[str, Any]) -> Any:
+    width, height = image.size
+    x1, y1, x2, y2 = region["bbox"]
+    return image.crop((round(x1 * width), round(y1 * height), round(x2 * width), round(y2 * height)))
+
+
+def _local_inventory(inventory: dict[str, Any], region: dict[str, Any]) -> dict[str, Any]:
+    local = deepcopy(inventory)
+    local["spaces"] = [space for space in local["spaces"] if space.get("floor_id") == region["floor_id"]]
+    for space in local["spaces"]:
+        bbox = space["bbox"]
+        space["bbox"] = _map_point(bbox[:2], region, to_global=False) + _map_point(bbox[2:], region, to_global=False)
+        space["bbox"] = [max(0, min(1, value)) for value in space["bbox"]]
+    return local
+
+
+def _globalize_observations(observations: dict[str, Any], region: dict[str, Any], index: int, prefix: str = "R") -> dict[str, Any]:
+    result = deepcopy(observations)
+    opening_ids = {}
+    for item in result.get("openings", []):
+        original = item["id"]
+        item["id"] = f"{prefix}{index}_{original}"
+        opening_ids[original] = item["id"]
+        if _valid_normalized_coordinates(item.get("position"), 2):
+            item["position"] = _map_point(item["position"], region, to_global=True)
+    for item in result.get("connections", []):
+        item["id"] = f"{prefix}{index}_{item['id']}"
+        item["opening_id"] = opening_ids.get(item.get("opening_id"), item.get("opening_id"))
+        if _valid_normalized_coordinates(item.get("position"), 2):
+            item["position"] = _map_point(item["position"], region, to_global=True)
+    for item in result.get("windows", []):
+        item["id"] = f"{prefix}{index}_{item.get('id', 'W')}"
+        if _valid_normalized_coordinates(item.get("position"), 2):
+            item["position"] = _map_point(item["position"], region, to_global=True)
+    return result
 
 
 def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -351,20 +506,32 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
         types = {space_a.get("space_type"), space_b.get("space_type")}
         labels = f"{space_a.get('label', '')} {space_b.get('label', '')}"
         floor_a, floor_b = space_a.get("floor_id"), space_b.get("floor_id")
-        if (
-            traversable
-            and floor_a
-            and floor_b
-            and floor_a != floor_b
-            and "vertical_circulation" not in types
-        ):
-            reasons.append("別階の空間を階段なしで直接接続している")
+        if traversable and (not floor_a or not floor_b):
+            reasons.append("接続先の図面領域・階が不明")
+        if traversable and floor_a and floor_b and floor_a != floor_b:
+            reasons.append("別階の図面同士を直接接続している。階段間はvertical_linksで別管理")
+        if traversable and types & {"room", "storage", "vertical_circulation"} and not types & {"hall", "sanitary", "exterior"}:
+            first_box, second_box = space_a.get("bbox"), space_b.get("bbox")
+            if _valid_normalized_coordinates(first_box, 4) and _valid_normalized_coordinates(second_box, 4):
+                if _bbox_gap(first_box, second_box) > 0.025:
+                    reasons.append("空間同士が離れている")
+                elif opening and (
+                    _point_to_bbox_edge_distance(opening.get("position"), first_box) > 0.035
+                    or _point_to_bbox_edge_distance(opening.get("position"), second_box) > 0.035
+                ):
+                    reasons.append("扉が両空間の境界上にない")
         if traversable and "バルコニー" in labels and "hall" in types:
             reasons.append("玄関・廊下とバルコニーの直結は要画像再確認")
         if traversable and "exterior" in types and ("storage" in types or "sanitary" in types):
             reasons.append("収納・水回りと屋外の直結は要画像再確認")
         if traversable and types == {"storage"}:
             reasons.append("収納同士を通行経路にしている")
+        if traversable and types in ({"storage", "sanitary"}, {"storage", "vertical_circulation"}):
+            reasons.append("収納と水回り・階段の直結は要画像再確認")
+        if traversable and "storage" in types and "屋根裏" in labels and "vertical_circulation" not in types:
+            reasons.append("屋根裏収納への通常扉による直結は要画像再確認")
+        if traversable and types == {"sanitary"} and "トイレ" in labels and "浴室" in labels:
+            reasons.append("トイレと浴室の直結は洗面所側の扉を要再確認")
         if traversable and types == {"room", "sanitary"}:
             room = space_a if space_a.get("space_type") == "room" else space_b
             sanitary = space_b if room is space_a else space_a
@@ -378,6 +545,7 @@ def validate_connections(structure: dict[str, Any]) -> tuple[dict[str, Any], lis
                 reasons.append("浴室と廊下の直結は洗面所・脱衣所側を要再確認")
 
         if reasons:
+            reasons = list(dict.fromkeys(reasons))
             if prior_status == "accepted":
                 connection["validation_status"] = "rejected"
             connection["validation_reasons"] = reasons
@@ -403,6 +571,50 @@ def deduplicate_topology_observations(topology: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def discard_invalid_observations(inventory: dict[str, Any], topology: dict[str, Any]) -> dict[str, Any]:
+    """Keep a bad model reference from aborting the whole image analysis."""
+    result = deepcopy(topology)
+    known_spaces = {space["id"] for space in inventory["spaces"]}
+    unreadable = result.get("unreadable_items")
+    if not isinstance(unreadable, list):
+        unreadable = []
+        result["unreadable_items"] = unreadable
+    seen_openings = set()
+    valid_openings = []
+    for item in result.get("openings") or []:
+        if (not isinstance(item, dict) or not item.get("id") or item["id"] in seen_openings
+                or not _valid_normalized_coordinates(item.get("position"), 2)):
+            unreadable.append("扉・開口のIDまたは座標が不正のため除外")
+            continue
+        valid_openings.append(item)
+        seen_openings.add(item["id"])
+    result["openings"] = valid_openings
+    opening_ids = seen_openings
+    valid_connections = []
+    for item in result.get("connections") or []:
+        if (not isinstance(item, dict) or item.get("space_a") not in known_spaces
+                or item.get("space_b") not in known_spaces or item.get("opening_id") not in opening_ids
+                or not _valid_normalized_coordinates(item.get("position"), 2)):
+            unreadable.append(f"{item.get('id', '接続') if isinstance(item, dict) else '接続'}: 未定義の部屋・開口IDを除外")
+            continue
+        valid_connections.append(item)
+    result["connections"] = valid_connections
+    for key in ("windows", "fixtures"):
+        valid_items = []
+        for item in result.get(key) or []:
+            if (not isinstance(item, dict) or item.get("space_id") not in known_spaces
+                    or key == "windows" and (not item.get("id") or not _valid_normalized_coordinates(item.get("position"), 2))):
+                unreadable.append(f"{key}: 未定義の部屋IDを除外")
+                continue
+            valid_items.append(item)
+        result[key] = valid_items
+    result["negative_observations"] = [
+        item for item in result.get("negative_observations") or []
+        if isinstance(item, dict) and item.get("space_id") in known_spaces
+    ]
+    return result
+
+
 def _point_distance(first: Any, second: Any) -> float:
     if not _valid_normalized_coordinates(first, 2) or not _valid_normalized_coordinates(second, 2):
         return float("inf")
@@ -416,6 +628,27 @@ def _point_to_bbox_distance(point: Any, bbox: Any) -> float:
     x, y = point
     dx = max(bbox[0] - x, 0, x - bbox[2])
     dy = max(bbox[1] - y, 0, y - bbox[3])
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def _point_to_bbox_edge_distance(point: Any, bbox: Any) -> float:
+    if not _valid_normalized_coordinates(point, 2) or not _valid_normalized_coordinates(bbox, 4):
+        return float("inf")
+    x, y = point
+    vertical = min(
+        ((x - edge_x) ** 2 + max(bbox[1] - y, 0, y - bbox[3]) ** 2) ** 0.5
+        for edge_x in (bbox[0], bbox[2])
+    )
+    horizontal = min(
+        ((y - edge_y) ** 2 + max(bbox[0] - x, 0, x - bbox[2]) ** 2) ** 0.5
+        for edge_y in (bbox[1], bbox[3])
+    )
+    return min(vertical, horizontal)
+
+
+def _bbox_gap(first: list[float], second: list[float]) -> float:
+    dx = max(first[0] - second[2], second[0] - first[2], 0)
+    dy = max(first[1] - second[3], second[1] - first[3], 0)
     return (dx * dx + dy * dy) ** 0.5
 
 
@@ -439,12 +672,28 @@ def add_verified_topology(structure: dict[str, Any]) -> dict[str, Any]:
     )
     connection_count = len(enriched["connections"])
     accepted_count = len(direct_connections)
-    low_reliability = connection_count >= 3 and rejected_count >= accepted_count and rejected_count >= 2
+    rejected_majority = connection_count >= 3 and rejected_count >= accepted_count and rejected_count >= 2
+    essential_spaces = [space["id"] for space in enriched["spaces"]
+                        if space.get("space_type") in {"room", "hall", "sanitary", "vertical_circulation"}]
+    connected_essential = sum(bool(neighbors[space_id]) for space_id in essential_spaces)
+    low_coverage = len(essential_spaces) >= 4 and connected_essential * 2 < len(essential_spaces)
+    discarded_refs = sum("未定義" in str(item) or "座標が不正" in str(item)
+                         for item in enriched.get("unreadable_items", []))
+    low_discard = discarded_refs >= 2
+    low_reliability = rejected_majority or low_coverage or low_discard
 
     space_types = {space["id"]: space.get("space_type") for space in enriched["spaces"]}
+    stair_spaces = [space for space in enriched["spaces"] if space.get("space_type") == "vertical_circulation"]
+    vertical_links = [
+        {"space_a": first["id"], "space_b": second["id"], "status": "unverified"}
+        for index, first in enumerate(stair_spaces)
+        for second in stair_spaces[index + 1:]
+        if first.get("floor_id") and second.get("floor_id") and first["floor_id"] != second["floor_id"]
+    ]
     enriched["verified_topology"] = {
         "traversable_neighbors": {key: sorted(value) for key, value in neighbors.items()},
         "direct_connections": direct_connections,
+        "vertical_links": vertical_links,
         "non_transit_spaces": sorted(
             space_id for space_id, space_type in space_types.items() if space_type == "storage"
         ),
@@ -458,6 +707,10 @@ def add_verified_topology(structure: dict[str, Any]) -> dict[str, Any]:
             "observed_count": connection_count,
             "accepted_count": accepted_count,
             "rejected_count": rejected_count,
+            "connected_essential_count": connected_essential,
+            "essential_count": len(essential_spaces),
+            "discarded_reference_count": discarded_refs,
+            "reason": "接続候補の大半を拒否" if rejected_majority else "主要空間の半数以上に確認済み入口がない" if low_coverage else "未定義ID・座標の観測が複数" if low_discard else "",
             "reliability": "low" if low_reliability else "usable",
         },
     }
@@ -515,7 +768,8 @@ def find_topology_anomalies(structure: dict[str, Any]) -> list[str]:
                     continue
                 reachable.add(neighbor)
                 queue.append(neighbor)
-        if living_ids and not any(item in reachable for item in living_ids):
+        same_floor_living = [item for item in living_ids if spaces[item].get("floor_id") == spaces[hall_id].get("floor_id")]
+        if same_floor_living and not any(item in reachable for item in same_floor_living):
             anomalies.append(
                 f"{hall_id}(玄関・廊下)からLDKへ行くのに水回り・収納・屋外を通る。ホール形状とLDK扉を再確認"
             )
@@ -653,37 +907,169 @@ def _parse_or_repair_structure(
             ) from repair_error
 
 
-def extract_floor_plan_structure(image: Any, client: Any, model: str = DEFAULT_MODEL) -> dict[str, Any]:
+def extract_floor_plan_structure(
+    image: Any, client: Any, model: str = DEFAULT_MODEL,
+    progress: Callable[[str], None] | None = None,
+    checkpoint_path: Path | None = None,
+    resume_checkpoint: bool = True,
+) -> dict[str, Any]:
     """Stage 1: inventory spaces, then detect openings and associate topology."""
-    inventory_response = _generate_with_retry(
-        client,
-        model=model,
-        contents=build_visual_contents(build_space_inventory_prompt(), image),
-        config={"response_mime_type": "application/json", "response_json_schema": SPACE_INVENTORY_SCHEMA, "temperature": 0},
-    )
-    inventory = _parse_json_object(_response_text(inventory_response, "空間一覧"), "空間一覧")
+    stage_data: dict[str, Any] = {}
+    if resume_checkpoint and checkpoint_path and checkpoint_path.is_file():
+        try:
+            saved = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            if saved.get("pipeline_version") == PIPELINE_CACHE_VERSION:
+                stage_data = saved.get("stages", {})
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def remember(stage: str, value: dict[str, Any]) -> None:
+        if checkpoint_path is None:
+            return
+        stage_data[stage] = deepcopy(value)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = checkpoint_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"pipeline_version": PIPELINE_CACHE_VERSION, "stages": stage_data}, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(checkpoint_path)
+
+    if progress:
+        progress("1/4 図面領域を読み取り中")
+    inventory = deepcopy(stage_data.get("inventory"))
+    if inventory is None:
+        inventory_response = _generate_with_retry(
+            client, model=model,
+            contents=build_visual_contents(build_space_inventory_prompt(), image),
+            config={"response_mime_type": "application/json", "response_json_schema": SPACE_INVENTORY_SCHEMA, "temperature": 0},
+        )
+        inventory = normalize_plan_regions(_parse_json_object(_response_text(inventory_response, "空間一覧"), "空間一覧"))
+        remember("inventory", inventory)
+    regions = inventory["plan_regions"]
+    split = len(regions) > 1 and hasattr(image, "crop") and hasattr(image, "size")
+    if split:
+        refined_spaces = []
+        fallbacks = []
+        for index, region in enumerate(regions, 1):
+            if progress:
+                progress(f"1/4 部屋の位置を再読取中（領域 {index}/{len(regions)}）")
+            cropped = _crop_floor_region(image, region)
+            stage = f"region_inventory_{index}"
+            local = deepcopy(stage_data.get(stage))
+            expected_count = sum(space.get("floor_id") == region["floor_id"] for space in inventory["spaces"])
+            fallback = bool(stage_data.get(f"fallback_{index}"))
+            if local is not None and not _valid_cropped_inventory(local, expected_count):
+                stage_data.pop(stage, None)
+                stage_data.pop(f"topology_{index}", None)
+                stage_data.pop(f"features_{index}", None)
+                local = None
+                fallback = True
+            if local is None and not fallback:
+                response = _generate_with_retry(
+                    client, model=model,
+                    contents=build_visual_contents(build_cropped_inventory_prompt(region["floor_id"]), cropped),
+                    config={"response_mime_type": "application/json", "response_json_schema": CROPPED_INVENTORY_SCHEMA, "temperature": 0},
+                )
+                local = _parse_or_repair_json_object(
+                    _response_text(response, "階別空間一覧"), client, model,
+                    "階別空間一覧", CROPPED_INVENTORY_SCHEMA,
+                )
+                if not _valid_cropped_inventory(local, expected_count):
+                    fallback = True
+                    stage_data.pop(f"topology_{index}", None)
+                    stage_data.pop(f"features_{index}", None)
+                else:
+                    remember(stage, local)
+            if fallback:
+                originals = [deepcopy(space) for space in inventory["spaces"] if space.get("floor_id") == region["floor_id"]]
+                if not originals:
+                    raise RuntimeError(f"{region['floor_id']}の部屋一覧を読めません。")
+                refined_spaces.extend(originals)
+                fallbacks.append(region["floor_id"])
+                remember(f"fallback_{index}", {"reason": "階別の部屋再読取が不完全"})
+                continue
+            spaces = local.get("spaces")
+            if not isinstance(spaces, list) or not spaces:
+                raise RuntimeError(f"{region['floor_id']}の部屋を読めません。")
+            for space in spaces:
+                if not isinstance(space, dict) or not _valid_normalized_coordinates(space.get("bbox"), 4):
+                    raise RuntimeError(f"{region['floor_id']}の部屋座標が不正です。")
+                space["id"] = f"R{index}_{space.get('id', 'S')}"
+                space["floor_id"] = region["floor_id"]
+                space["bbox"] = _map_point(space["bbox"][:2], region, to_global=True) + _map_point(space["bbox"][2:], region, to_global=True)
+                refined_spaces.append(space)
+        inventory["spaces"] = refined_spaces
+        inventory["floor_reading_fallbacks"] = fallbacks
     provisional = {
         "image_quality": inventory.get("image_quality"),
         "orientation": inventory.get("orientation"),
+        "plan_regions": inventory.get("plan_regions"),
+        "floor_reading_fallbacks": inventory.get("floor_reading_fallbacks", []),
         "spaces": inventory.get("spaces"),
         "openings": [], "connections": [], "windows": [], "fixtures": [],
         "negative_observations": [], "unreadable_items": [],
     }
     parse_structure_response(json.dumps(provisional, ensure_ascii=False))
 
-    topology_response = _generate_with_retry(
-        client,
-        model=model,
-        contents=build_visual_contents(build_topology_prompt(inventory), image),
-        config={"response_mime_type": "application/json", "response_json_schema": TOPOLOGY_OBSERVATION_SCHEMA, "temperature": 0},
-    )
-    topology = _parse_or_repair_json_object(
-        _response_text(topology_response, "扉・接続結果"),
-        client,
-        model,
-        "扉・接続結果",
-        TOPOLOGY_OBSERVATION_SCHEMA,
-    )
+    stages = [(_local_inventory(inventory, region), _crop_floor_region(image, region), region, index)
+              for index, region in enumerate(regions, 1)] if split else [(inventory, image, None, 0)]
+    topology = {"openings": [], "connections": [], "windows": [], "fixtures": [],
+                "negative_observations": [], "unreadable_items": []}
+    for local_inventory, local_image, region, index in stages:
+        if progress:
+            progress(f"2/4 扉・接続を確認中（領域 {index or 1}/{len(stages)}）")
+        stage = f"topology_{index}"
+        observed = deepcopy(stage_data.get(stage))
+        if observed is None:
+            topology_response = _generate_with_retry(
+                client, model=model,
+                contents=build_visual_contents(build_topology_prompt(local_inventory), local_image),
+                config={"response_mime_type": "application/json", "response_json_schema": TOPOLOGY_OBSERVATION_SCHEMA, "temperature": 0},
+            )
+            observed = _parse_or_repair_json_object(
+                _response_text(topology_response, "扉・接続結果"), client, model,
+                "扉・接続結果", TOPOLOGY_OBSERVATION_SCHEMA,
+            )
+            remember(stage, observed)
+        observed = discard_invalid_observations(local_inventory, observed)
+        if region:
+            observed = _globalize_observations(observed, region, index)
+        for key in topology:
+            values = observed.get(key)
+            if isinstance(values, list):
+                topology[key].extend(values)
+
+    if hasattr(image, "crop") and hasattr(image, "size"):
+        for local_inventory, local_image, region, index in stages:
+            if progress:
+                progress(f"3/4 窓・設備を確認中（領域 {index or 1}/{len(stages)}）")
+            stage = f"features_{index}"
+            features = deepcopy(stage_data.get(stage))
+            if features is None:
+                feature_response = _generate_with_retry(
+                    client, model=model,
+                    contents=build_visual_contents(build_feature_prompt(local_inventory), local_image),
+                    config={"response_mime_type": "application/json", "response_json_schema": FEATURE_SCHEMA, "temperature": 0},
+                )
+                features = _parse_or_repair_json_object(
+                    _response_text(feature_response, "窓・設備結果"), client, model,
+                    "窓・設備結果", FEATURE_SCHEMA,
+                )
+                remember(stage, features)
+            features = discard_invalid_observations(local_inventory, features)
+            if region:
+                features = _globalize_observations(features, region, index, prefix="F")
+            for window in features.get("windows", []):
+                if not any(existing.get("space_id") == window.get("space_id")
+                           and _point_distance(existing.get("position"), window.get("position")) < 0.025
+                           for existing in topology["windows"]):
+                    if any(existing.get("id") == window.get("id") for existing in topology["windows"]):
+                        window["id"] = f"F{index}_{window['id']}"
+                    topology["windows"].append(window)
+            existing_fixtures = {(item.get("space_id"), item.get("fixture")) for item in topology["fixtures"]}
+            topology["fixtures"].extend(item for item in features.get("fixtures", [])
+                                        if (item.get("space_id"), item.get("fixture")) not in existing_fixtures)
+            if isinstance(features.get("unreadable_items"), list):
+                topology["unreadable_items"].extend(features["unreadable_items"])
+    topology = discard_invalid_observations(inventory, topology)
     topology = deduplicate_topology_observations(topology)
     combined = {**inventory, **topology}
     return parse_structure_response(json.dumps(combined, ensure_ascii=False))
@@ -817,6 +1203,8 @@ def build_analysis_prompt(knowledge: str, structure: dict[str, Any]) -> str:
 - 既に独立した個室が複数あることを「将来2部屋に分割できない」の減点理由にしない。将来分割を想定した大部屋が確認できる場合だけ適用する。
 - 根拠には必ずspace ID、connection IDまたはwindow IDを併記する。
 - 経路は verified_topology.traversable_neighbors の組だけで構成し、各移動をIDで示す。non_transit_spacesは経路の途中に使わない。
+- vertical_linksのstatus=unverifiedは上下階を通れる根拠ではない。階段の記号だけで上下階の移動経路が完成したと断定しない。
+- bboxや部屋の広さだけで家具配置の余裕、安全性、収納容量を断定しない。設備や窓の未検出を好条件の根拠にしない。
 - 不足を指摘できる対象は verified_topology.confirmed_absences に列挙されたものだけ。この配列にない収納・窓などを「ない」「不足」と書かない。
 
 【固定採点表・合計100点】
@@ -857,6 +1245,7 @@ def compact_structure_for_scoring(structure: dict[str, Any]) -> dict[str, Any]:
     return {
         "image_quality": structure.get("image_quality", {}),
         "orientation": structure.get("orientation", {}),
+        "plan_regions": [{"floor_id": region.get("floor_id")} for region in structure.get("plan_regions", [])],
         "spaces": [
             {key: item.get(key) for key in ("id", "label", "space_type", "floor_id", "area_text", "confidence") if key in item}
             for item in structure.get("spaces", [])
@@ -885,6 +1274,26 @@ def analyze_from_structure(
     model: str = DEFAULT_MODEL,
 ) -> dict[str, Any]:
     """Stage 2: get JSON proposals, then enforce evidence-based caps in Python."""
+    if len(structure.get("plan_regions", [])) > 1:
+        floors = {region.get("floor_id") for region in structure["plan_regions"]}
+        if not floors or floors & {None, "unknown", "不明", "null"} or any(space.get("floor_id") not in floors for space in structure.get("spaces", [])):
+            raise RuntimeError("複数階の所属が未確定のため採点を停止しました。")
+    quality = structure.get("verified_topology", {}).get("connection_quality", {})
+    hold_reasons = []
+    if structure.get("floor_reading_fallbacks"):
+        hold_reasons.append(f"{', '.join(structure['floor_reading_fallbacks'])}の階別部屋再読取が失敗し、初回の部屋一覧を使用")
+    if (structure.get("image_quality", {}).get("level") == "high"
+            and len(structure.get("spaces", [])) >= 3
+            and not structure.get("windows") and not structure.get("fixtures")):
+        hold_reasons.append("判読性が高い図面なのに窓・設備を1件も抽出できず、認識漏れの可能性が高い")
+    if quality.get("reliability") == "low":
+        hold_reasons.append(f"{quality.get('reason') or '通行経路の信頼性が不足'}。接続候補{quality.get('observed_count', 0)}件中{quality.get('rejected_count', 0)}件を拒否、主要空間{quality.get('essential_count', 0)}件中{quality.get('connected_essential_count', 0)}件に接続を確認")
+    if hold_reasons:
+        return {
+            "status": "held", "total": None, "criteria": [],
+            "hold_reasons": hold_reasons,
+            "validation_adjustments": [],
+        }
     response = _generate_with_retry(
         client,
         model=model,
@@ -936,22 +1345,41 @@ def _criterion_cap(name: str, allocation: int, structure: dict[str, Any]) -> tup
     spaces = structure.get("spaces", [])
     fixtures = structure.get("fixtures", [])
     connection_quality = structure.get("verified_topology", {}).get("connection_quality", {})
+    direct_connections = structure.get("verified_topology", {}).get("direct_connections", [])
+
+    if not direct_connections and name in {"生活動線", "ゾーニング・プライバシー", "家事効率"}:
+        return allocation // 2, "確認済みの通行経路がない"
+
+    if len(structure.get("plan_regions", [])) > 1 and name in {
+        "生活動線", "ゾーニング・プライバシー", "家事効率",
+    } and not any(link.get("status") == "verified" for link in structure.get("verified_topology", {}).get("vertical_links", [])):
+        return allocation // 2, "上下階の階段接続が未検証のため、住戸全体の評価は確認不能"
 
     if connection_quality.get("reliability") == "low" and name in {
         "生活動線", "ゾーニング・プライバシー", "家事効率", "安全性・バリアフリー",
     }:
         return allocation // 2, "接続の大半が機械検証で拒否されたため中立点以下"
 
-    if name == "採光・通風" and not windows and not glazed:
-        return allocation // 2, "窓・ガラス戸の確認根拠がないため中立点以下"
-    if name == "家具配置・居住性" and not any(item.get("area_text") or item.get("bbox") for item in spaces):
-        return allocation // 2, "面積・形状の根拠がないため中立点以下"
-    if name == "収納" and not any(item.get("space_type") == "storage" for item in spaces):
-        return allocation // 2, "収納の確認根拠がないため中立点以下"
+    if name == "採光・通風":
+        if not windows and not glazed:
+            return allocation // 2, "窓・ガラス戸の確認根拠がないため中立点以下"
+        if not any(window.get("confidence") in {"high", "medium"} for window in windows) and not glazed:
+            return allocation // 2, "窓の読取確度が低い"
+        return round(allocation * 0.6), "隣棟・日射・通風経路を画像だけで確認できない"
+    if name == "家具配置・居住性":
+        return allocation // 2, "家具寸法・有効幅・開閉干渉を確認できない"
+    if name == "収納":
+        storage = [item for item in spaces if item.get("space_type") == "storage"]
+        if not storage:
+            return allocation // 2, "収納の確認根拠がないため中立点以下"
+        connected = structure.get("verified_topology", {}).get("traversable_neighbors", {})
+        if any(not connected.get(item["id"]) for item in storage):
+            return allocation // 2, "一部収納へのアクセスが確認できず、容量も不明"
+        return round(allocation * 0.6), "収納容量・使いやすさを画像だけで確認できない"
     if name == "家事効率" and not fixtures:
         return allocation // 2, "設備の確認根拠がないため中立点以下"
     if name == "安全性・バリアフリー":
-        return min(allocation, round(allocation * 0.7)), "段差・扉干渉・避難条件を画像だけで完全確認できない"
+        return allocation // 2, "段差・寸法・扉干渉・避難条件を画像だけで確認できない"
     if name == "将来対応・可変性":
         return allocation // 2, "構造・家族条件・可変壁の情報がないため中立点以下"
     if warnings and name in {"生活動線", "ゾーニング・プライバシー", "家事効率"}:
@@ -970,6 +1398,13 @@ def validate_scoring_json(text: str, structure: dict[str, Any]) -> dict[str, Any
 
     proposed = {item.get("name"): item for item in raw["criteria"] if isinstance(item, dict)}
     valid_ids = _valid_evidence_ids(structure)
+    light_ids = {window.get("id") for window in structure.get("windows", [])
+                 if window.get("id") and window.get("confidence") in {"high", "medium"}}
+    light_ids.update(item.get("id") for item in structure.get("connections", [])
+                     if item.get("boundary_relation") == "glazed_door" and item.get("validation_status", "accepted") == "accepted")
+    route_ids = {item.get("id") for item in structure.get("connections", [])
+                 if item.get("validation_status", "accepted") == "accepted" and item.get("traversable") is True}
+    connection_ids = {item.get("id") for item in structure.get("connections", [])}
     results = []
     adjustments = []
     status_ratios = {"confirmed": 1.0, "partial": 0.7, "unverifiable": 0.5}
@@ -985,6 +1420,12 @@ def validate_scoring_json(text: str, structure: dict[str, Any]) -> dict[str, Any
             evidence_ids = [value for value in evidence_ids if value in storage_ids]
             if non_storage_ids:
                 invalid_ids.extend(non_storage_ids)
+        if name == "採光・通風":
+            invalid_ids.extend(value for value in evidence_ids if value not in light_ids)
+            evidence_ids = [value for value in evidence_ids if value in light_ids]
+        if name in {"生活動線", "家事効率"}:
+            invalid_ids.extend(value for value in evidence_ids if value in connection_ids and value not in route_ids)
+            evidence_ids = [value for value in evidence_ids if value not in connection_ids or value in route_ids]
         if not evidence_ids:
             status = "unverifiable"
         proposed_score = item.get("proposed_score", 0)
@@ -994,6 +1435,8 @@ def validate_scoring_json(text: str, structure: dict[str, Any]) -> dict[str, Any
         status_cap = round(allocation * status_ratios[status])
         evidence_cap, cap_reason = _criterion_cap(name, allocation, structure)
         final_score = min(proposed_score, status_cap, evidence_cap)
+        if evidence_cap < allocation and cap_reason and status == "confirmed":
+            status = "partial" if evidence_ids else "unverifiable"
         reasons = []
         if invalid_ids:
             reasons.append(f"無効な根拠IDを除外: {', '.join(map(str, invalid_ids))}")
@@ -1003,11 +1446,16 @@ def validate_scoring_json(text: str, structure: dict[str, Any]) -> dict[str, Any
             reasons.append(cap_reason)
         if final_score != proposed_score:
             adjustments.append(f"{name}: {proposed_score}→{final_score}（{' / '.join(reasons) or '確認状態による上限'}）")
+        reason = str(item.get("reason", "確認不能"))
+        knowledge_basis = str(item.get("knowledge_basis", "該当根拠なし"))
+        if cap_reason and evidence_cap < allocation:
+            reason = f"{cap_reason}。この項目の良否は断定できない。"
+            knowledge_basis = "参考知識は確認済み条件に限って適用"
         results.append({
             "name": name, "score": final_score, "allocation": allocation,
             "status": status, "evidence_ids": evidence_ids,
-            "reason": str(item.get("reason", "確認不能")),
-            "knowledge_basis": str(item.get("knowledge_basis", "該当根拠なし")),
+            "reason": reason,
+            "knowledge_basis": knowledge_basis,
         })
 
     return {
@@ -1023,6 +1471,20 @@ def validate_scoring_json(text: str, structure: dict[str, Any]) -> dict[str, Any
 
 def render_analysis_report(scoring: dict[str, Any], structure: dict[str, Any]) -> str:
     """Render final Markdown deterministically; the model never controls totals or table shape."""
+    if scoring.get("status") == "held":
+        warnings = structure.get("verified_topology", {}).get("validation_warnings", [])
+        lines = [
+            "# 総合評価: 採点保留", "", "## 保留理由", "",
+            *(f"- {reason}" for reason in scoring.get("hold_reasons", [])),
+            "", "## 読み取り条件", "",
+            f"- 登録空間数: {len(structure.get('spaces', []))}",
+            f"- 窓: {len(structure.get('windows', []))}件、設備: {len(structure.get('fixtures', []))}件",
+            f"- 採用した通行可能接続: {len(structure.get('verified_topology', {}).get('direct_connections', []))}",
+            "", "## 接続検証警告", "",
+            *(f"- {warning}" for warning in warnings),
+            "", "構造の再読取または人手確認を終えてから採点してください。",
+        ]
+        return "\n".join(lines)
     quality = structure.get("image_quality", {}).get("level", "unknown")
     quality_label = {"high": "高", "medium": "中", "low": "低"}.get(quality, "不明")
     warnings = structure.get("verified_topology", {}).get("validation_warnings", [])
@@ -1030,8 +1492,10 @@ def render_analysis_report(scoring: dict[str, Any], structure: dict[str, Any]) -
     lines = [
         f"# 総合評価: {scoring['total']} / 100点", "", "## 読み取り条件",
         f"- 画像の判読性: {quality_label}",
+        f"- 図面領域: {', '.join(str(region.get('floor_id', '不明')) for region in structure.get('plan_regions', [])) or '未記録'}",
         f"- 登録空間数: {len(structure.get('spaces', []))}",
         f"- 採用した通行可能接続: {len(structure.get('verified_topology', {}).get('direct_connections', []))}",
+        f"- 未検証の階段間候補: {len(structure.get('verified_topology', {}).get('vertical_links', []))}",
         "", "## 採点表", "",
         "| 評価項目 | 得点 | 配点 | 確認状態 | 有効な根拠ID | 判定理由 | 参考知識 |",
         "|---|---:|---:|---|---|---|---|",
@@ -1078,10 +1542,17 @@ def analyze_floor_plan(
     client: Any,
     knowledge: str,
     model: str = DEFAULT_MODEL,
+    progress: Callable[[str], None] | None = None,
+    checkpoint_path: Path | None = None,
+    resume_checkpoint: bool = True,
 ) -> FloorPlanAnalysis:
     """Run topology extraction first, then evaluate the extracted JSON."""
-    draft = extract_floor_plan_structure(image, client, model)
+    draft = extract_floor_plan_structure(image, client, model, progress, checkpoint_path, resume_checkpoint)
+    if progress:
+        progress("接続を再照合中")
     structure = verify_floor_plan_structure(image, draft, client, model)
+    if progress:
+        progress("採点中")
     scoring = analyze_from_structure(structure, client, knowledge, model)
     report = render_analysis_report(scoring, structure)
     return FloorPlanAnalysis(draft_structure=draft, structure=structure, scoring=scoring, report=report)
@@ -1096,8 +1567,7 @@ def analyze_cached_structure(
 ) -> FloorPlanAnalysis:
     """Reuse cached vision results and execute only the scoring stage."""
     parse_structure_response(json.dumps(draft, ensure_ascii=False))
-    if "verified_topology" not in structure:
-        structure = add_verified_topology(structure)
+    structure = add_verified_topology(structure)
     scoring = analyze_from_structure(structure, client, knowledge, model)
     report = render_analysis_report(scoring, structure)
     return FloorPlanAnalysis(draft_structure=draft, structure=structure, scoring=scoring, report=report)

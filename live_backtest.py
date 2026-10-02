@@ -14,6 +14,7 @@ from PIL import Image, ImageOps
 from floor_plan import (
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_HOST,
+    PIPELINE_CACHE_VERSION,
     SCORE_CRITERIA,
     analyze_cached_structure,
     analyze_floor_plan,
@@ -35,6 +36,8 @@ def safe_model_name(model: str) -> str:
 
 def check_response(response: str) -> list[str]:
     """Return basic structural problems found in a model response."""
+    if "# 総合評価: 採点保留" in response:
+        return [] if "## 保留理由" in response and "## 接続検証警告" in response else ["採点保留レポートに理由がありません"]
     problems = []
     total_match = re.search(r"総合評価\s*[:：]\s*(\d+)\s*/\s*100", response)
     if total_match is None:
@@ -138,7 +141,12 @@ def main() -> int:
                 print("CACHE MISS: 画像認識を実行")
                 with Image.open(image_path) as source:
                     image = ImageOps.exif_transpose(source).convert("RGB")
-                result = analyze_floor_plan(image, client, knowledge, model)
+                result = analyze_floor_plan(
+                    image, client, knowledge, model,
+                    progress=lambda message: print(message, flush=True),
+                    checkpoint_path=None if args.no_cache else cache_path.with_suffix(".stages.json"),
+                    resume_checkpoint=not args.refresh_cache,
+                )
                 cache_status = "disabled" if args.no_cache else "miss"
                 if not args.no_cache:
                     save_structure_cache(
@@ -162,13 +170,17 @@ def main() -> int:
                     print(f"NG: {problem}")
                 check_text = "\n".join(f"- NG: {problem}" for problem in problems)
             else:
-                print("OK: 必須の採点項目とセクションを確認")
-                check_text = "- OK: 必須の採点項目とセクションを確認"
+                check_text = (
+                    "- OK: 採点保留理由を確認" if result.scoring.get("status") == "held"
+                    else "- OK: 必須の採点項目とセクションを確認"
+                )
+                print(check_text.removeprefix("- "))
 
             report = (
                 f"# 実画像バックテスト: {image_path.name}\n\n"
                 f"- 使用モデル: `{model}`\n"
                 f"- プロバイダー: `{client.provider_name}`\n"
+                f"- 読取パイプライン: `{PIPELINE_CACHE_VERSION}`\n"
                 f"- 知識ファイル: `knowledge.md` 全文\n\n"
                 f"- 構造キャッシュ: `{cache_status}`\n"
                 f"- 処理時間: `{elapsed:.1f}秒`\n\n"

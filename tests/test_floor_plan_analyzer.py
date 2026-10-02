@@ -22,15 +22,20 @@ from floor_plan import (
     validate_connections,
     validate_scoring_json,
 )
-from floor_plan.analyzer import TOPOLOGY_OBSERVATION_SCHEMA, _parse_or_repair_json_object
+from floor_plan.analyzer import (
+    TOPOLOGY_OBSERVATION_SCHEMA, _parse_or_repair_json_object,
+    add_verified_topology, discard_invalid_observations, extract_floor_plan_structure, normalize_plan_regions,
+    _valid_cropped_inventory,
+)
 
 
 VALID_STRUCTURE = {
     "image_quality": {"level": "high", "notes": []},
     "orientation": {"value": None, "confidence": "low", "evidence": "方位記号なし"},
+    "plan_regions": [{"floor_id": "unknown", "bbox": [0.0, 0.0, 1.0, 1.0]}],
     "spaces": [
-        {"id": "S1", "label": "LDK", "space_type": "room", "area_text": "11帖", "bbox": [0.0, 0.0, 0.6, 1.0], "confidence": "high", "evidence": "表記"},
-        {"id": "S2", "label": "バルコニー", "space_type": "exterior", "area_text": None, "bbox": [0.6, 0.0, 1.0, 1.0], "confidence": "high", "evidence": "表記"},
+        {"id": "S1", "label": "LDK", "space_type": "room", "floor_id": "unknown", "area_text": "11帖", "bbox": [0.0, 0.0, 0.6, 1.0], "confidence": "high", "evidence": "表記"},
+        {"id": "S2", "label": "バルコニー", "space_type": "exterior", "floor_id": "unknown", "area_text": None, "bbox": [0.6, 0.0, 1.0, 1.0], "confidence": "high", "evidence": "表記"},
     ],
     "openings": [
         {"id": "O1", "opening_type": "unknown", "position": [0.6, 0.5], "confidence": "high", "evidence": "境界"}
@@ -70,6 +75,198 @@ class FakeClient:
 
 
 class FloorPlanAnalyzerBacktest(unittest.TestCase):
+    def test_floor_regions_assign_floor_and_reject_ambiguous_space(self):
+        inventory = {
+            "plan_regions": [{"floor_id": "1階", "bbox": [0, 0, 0.48, 1]},
+                             {"floor_id": "２階平面図", "bbox": [0.52, 0, 1, 1]}],
+            "spaces": [{"id": "S1", "bbox": [0.1, 0.1, 0.2, 0.2], "floor_id": None},
+                       {"id": "S2", "bbox": [0.6, 0.1, 0.8, 0.2], "floor_id": None}],
+        }
+        normalized = normalize_plan_regions(inventory)
+        self.assertEqual([space["floor_id"] for space in normalized["spaces"]], ["1F", "2F"])
+        inventory["spaces"][1]["bbox"] = [0.48, 0.1, 0.52, 0.2]
+        with self.assertRaisesRegex(RuntimeError, "所属階"):
+            normalize_plan_regions(inventory)
+
+    def test_separate_or_unsupported_room_connections_are_rejected(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"][1].update(label="主寝室", space_type="room", bbox=[0.7, 0, 1, 1])
+        structure["connections"][0].update(boundary_relation="door", traversable=True)
+        checked = add_verified_topology(structure)
+        self.assertEqual(checked["verified_topology"]["direct_connections"], [])
+        self.assertTrue(any("離れている" in value for value in checked["verified_topology"]["validation_warnings"]))
+
+    def test_sample1_false_bedroom_living_door_is_rejected_by_edge_position(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"][0]["bbox"] = [0.67, 0.12, 0.94, 0.48]
+        structure["spaces"][1].update(label="主寝室", space_type="room", bbox=[0.62, 0.48, 0.87, 0.73])
+        structure["openings"][0]["position"] = [0.62, 0.48]
+        structure["connections"][0].update(boundary_relation="door", traversable=True, position=[0.62, 0.48])
+        checked = add_verified_topology(structure)
+        self.assertEqual(checked["verified_topology"]["direct_connections"], [])
+        self.assertTrue(any("境界上にない" in value for value in checked["verified_topology"]["validation_warnings"]))
+
+    def test_cross_floor_stairs_are_only_unverified_candidates(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"][0].update(space_type="vertical_circulation", floor_id="1F")
+        structure["spaces"][1].update(space_type="vertical_circulation", floor_id="2F")
+        structure["connections"][0].update(boundary_relation="door", traversable=True)
+        checked = add_verified_topology(structure)
+        self.assertEqual(checked["verified_topology"]["direct_connections"], [])
+        self.assertEqual(checked["verified_topology"]["vertical_links"][0]["status"], "unverified")
+
+    def test_attic_storage_and_bath_to_toilet_are_not_accepted_as_direct_routes(self):
+        attic = json.loads(json.dumps(VALID_STRUCTURE))
+        attic["spaces"][1].update(label="屋根裏収納", space_type="storage")
+        attic["connections"][0].update(boundary_relation="door", traversable=True)
+        self.assertEqual(add_verified_topology(attic)["verified_topology"]["direct_connections"], [])
+
+        sanitary = json.loads(json.dumps(VALID_STRUCTURE))
+        sanitary["spaces"][0].update(label="トイレ", space_type="sanitary")
+        sanitary["spaces"][1].update(label="浴室", space_type="sanitary")
+        sanitary["connections"][0].update(boundary_relation="door", traversable=True)
+        self.assertEqual(add_verified_topology(sanitary)["verified_topology"]["direct_connections"], [])
+
+        stairs = json.loads(json.dumps(VALID_STRUCTURE))
+        stairs["spaces"][0].update(label="階段", space_type="vertical_circulation")
+        stairs["spaces"][1].update(label="クローゼット", space_type="storage")
+        stairs["connections"][0].update(boundary_relation="door", traversable=True)
+        self.assertEqual(add_verified_topology(stairs)["verified_topology"]["direct_connections"], [])
+
+    def test_furniture_and_storage_cannot_receive_perfect_score_from_space_ids(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"].append({"id": "S3", "label": "収納", "space_type": "storage", "floor_id": "unknown", "bbox": [0.1, 0.1, 0.2, 0.2]})
+        structure = add_verified_topology(structure)
+        proposal = json.loads(json.dumps(VALID_SCORING))
+        for item in proposal["criteria"]:
+            if item["name"] == "収納":
+                item["evidence_ids"] = ["S3"]
+        scoring = validate_scoring_json(json.dumps(proposal, ensure_ascii=False), structure)
+        by_name = {item["name"]: item for item in scoring["criteria"]}
+        self.assertLessEqual(by_name["家具配置・居住性"]["score"], 7)
+        self.assertLessEqual(by_name["収納"]["score"], 5)
+        self.assertNotEqual(by_name["家具配置・居住性"]["status"], "confirmed")
+
+    def test_two_floor_crops_keep_global_window_positions_and_unique_ids(self):
+        class FakeImage:
+            def __init__(self, size=(100, 100)):
+                self.size = size
+
+            def crop(self, box):
+                return FakeImage((box[2] - box[0], box[3] - box[1]))
+
+            def resize(self, size, _resampling):
+                return FakeImage(size)
+
+        inventory = {
+            "image_quality": {"level": "high", "notes": []},
+            "orientation": {"value": None},
+            "plan_regions": [{"floor_id": "1F", "bbox": [0, 0, 0.5, 1]},
+                             {"floor_id": "2F", "bbox": [0.5, 0, 1, 1]}],
+            "spaces": [
+                {"id": "S1", "label": "洋室", "space_type": "room", "floor_id": None,
+                 "bbox": [0.1, 0.2, 0.4, 0.8], "confidence": "high"},
+                {"id": "S2", "label": "LDK", "space_type": "room", "floor_id": None,
+                 "bbox": [0.6, 0.2, 0.9, 0.8], "confidence": "high"},
+            ],
+        }
+        blank = {"openings": [], "connections": [], "windows": [], "fixtures": [],
+                 "negative_observations": [], "unreadable_items": []}
+        local1 = {"spaces": [{"id": "S1", "label": "洋室", "space_type": "room",
+                              "bbox": [0.2, 0.2, 0.8, 0.8], "confidence": "high"}]}
+        local2 = {"spaces": [{"id": "S1", "label": "LDK", "space_type": "room",
+                              "bbox": [0.2, 0.2, 0.8, 0.8], "confidence": "high"}]}
+        features1 = {"windows": [{"id": "W1", "space_id": "R1_S1", "position": [0.4, 0.5],
+                                   "confidence": "high"}], "fixtures": [], "unreadable_items": []}
+        features2 = {"windows": [{"id": "W1", "space_id": "R2_S1", "position": [0.5, 0.5],
+                                   "confidence": "high"}], "fixtures": [], "unreadable_items": []}
+        client = FakeClient(*(json.dumps(value, ensure_ascii=False) for value in
+                              (inventory, local1, local2, blank, blank, features1, features2)))
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "stages.json"
+            extracted = extract_floor_plan_structure(FakeImage(), client, "test-model", checkpoint_path=checkpoint)
+            repeat_client = FakeClient()
+            repeated = extract_floor_plan_structure(FakeImage(), repeat_client, "test-model", checkpoint_path=checkpoint)
+        self.assertEqual(extracted, repeated)
+        self.assertEqual(len(repeat_client.models.calls), 0)
+        self.assertEqual(len(client.models.calls), 7)
+        self.assertEqual([space["floor_id"] for space in extracted["spaces"]], ["1F", "2F"])
+        self.assertEqual([item["position"] for item in extracted["windows"]], [[0.2, 0.5], [0.75, 0.5]])
+        self.assertEqual(len({item["id"] for item in extracted["windows"]}), 2)
+
+    def test_scoring_stops_if_a_multi_floor_space_has_no_floor(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["plan_regions"] = [{"floor_id": "1F", "bbox": [0, 0, 0.5, 1]},
+                                     {"floor_id": "2F", "bbox": [0.5, 0, 1, 1]}]
+        structure["spaces"][0]["floor_id"] = None
+        client = FakeClient(json.dumps(VALID_SCORING, ensure_ascii=False))
+        with self.assertRaisesRegex(RuntimeError, "所属が未確定"):
+            analyze_cached_structure(structure, structure, client, "知識", "test-model")
+        self.assertEqual(len(client.models.calls), 0)
+
+    def test_non_traversable_edge_is_not_route_evidence(self):
+        structure = add_verified_topology(VALID_STRUCTURE)
+        proposal = json.loads(json.dumps(VALID_SCORING))
+        proposal["criteria"][0]["evidence_ids"] = ["C1"]
+        scoring = validate_scoring_json(json.dumps(proposal, ensure_ascii=False), structure)
+        self.assertEqual(scoring["criteria"][0]["evidence_ids"], [])
+        self.assertEqual(scoring["criteria"][0]["status"], "unverifiable")
+
+    def test_low_reliability_holds_scoring_without_model_call(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        for index in range(2, 5):
+            opening = dict(structure["openings"][0], id=f"O{index}", position=[0.1, 0.1])
+            connection = dict(structure["connections"][0], id=f"C{index}", opening_id=f"O{index}",
+                              boundary_relation="door", traversable=True, position=[0.1, 0.1])
+            structure["openings"].append(opening)
+            structure["connections"].append(connection)
+        client = FakeClient()
+        result = analyze_cached_structure(structure, structure, client, "参考知識", "test-model")
+        self.assertIsNone(result.scoring["total"])
+        self.assertIn("# 総合評価: 採点保留", result.report)
+        self.assertEqual(len(client.models.calls), 0)
+
+    def test_missing_entrances_for_most_rooms_also_holds_score(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        for index in range(3, 7):
+            structure["spaces"].append({"id": f"S{index}", "label": "洋室", "space_type": "room",
+                                        "floor_id": "unknown", "bbox": [0.1, 0.1, 0.2, 0.2]})
+        checked = add_verified_topology(structure)
+        self.assertEqual(checked["verified_topology"]["connection_quality"]["reliability"], "low")
+        self.assertEqual(checked["verified_topology"]["connection_quality"]["reason"], "主要空間の半数以上に確認済み入口がない")
+
+    def test_unknown_model_space_id_drops_only_bad_connection(self):
+        topology = {key: json.loads(json.dumps(VALID_STRUCTURE[key]))
+                    for key in ("openings", "connections", "windows", "fixtures", "unreadable_items")}
+        topology["connections"][0]["space_b"] = "R1_missing"
+        cleaned = discard_invalid_observations(VALID_STRUCTURE, topology)
+        self.assertEqual(cleaned["connections"], [])
+        self.assertTrue(any("未定義" in value for value in cleaned["unreadable_items"]))
+
+    def test_cropped_inventory_rejects_copied_json_example(self):
+        copied = {"spaces": [{"id": "S1", "label": "LDK",
+                              "space_type": "room|hall|sanitary|storage|exterior|vertical_circulation|other",
+                              "bbox": [0, 0, 1, 1]}]}
+        self.assertFalse(_valid_cropped_inventory(copied, expected_count=7))
+
+    def test_cropped_inventory_fallback_holds_score(self):
+        structure = add_verified_topology(VALID_STRUCTURE)
+        structure["floor_reading_fallbacks"] = ["1F"]
+        client = FakeClient()
+        result = analyze_cached_structure(structure, structure, client, "参考知識", "test-model")
+        self.assertIsNone(result.scoring["total"])
+        self.assertIn("1Fの階別部屋再読取", result.report)
+        self.assertEqual(len(client.models.calls), 0)
+
+    def test_high_quality_plan_with_no_windows_or_fixtures_holds_score(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"].append({"id": "S3", "label": "収納", "space_type": "storage",
+                                    "floor_id": "unknown", "bbox": [0.1, 0.1, 0.2, 0.2]})
+        client = FakeClient()
+        result = analyze_cached_structure(structure, structure, client, "参考知識", "test-model")
+        self.assertIn("窓・設備を1件も抽出", result.report)
+        self.assertIsNone(result.scoring["total"])
+
     def test_score_weights_total_100(self):
         self.assertEqual(sum(points for _, points, _ in SCORE_CRITERIA), 100)
         self.assertEqual(len(SCORE_CRITERIA), 8)
@@ -272,7 +469,7 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
 
     def test_two_stage_analysis_uses_image_only_in_extraction(self):
         image = object()
-        inventory = {key: VALID_STRUCTURE[key] for key in ("image_quality", "orientation", "spaces")}
+        inventory = {key: VALID_STRUCTURE[key] for key in ("image_quality", "orientation", "plan_regions", "spaces")}
         topology = {
             key: VALID_STRUCTURE[key]
             for key in ("openings", "connections", "windows", "fixtures", "negative_observations", "unreadable_items")
