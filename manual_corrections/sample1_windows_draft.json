@@ -2,12 +2,31 @@
   "image": "sample1.webp",
   "review_status": "draft",
   "source": "assistant_visual_draft",
-  "notes": "元画像の窓らしい線を目視で仮登録したもの。モデルの検出結果でも、利用者承認済みの正解でもない。番号ごとに窓かどうかと位置を確認する。",
+  "notes": "W1〜W5は作業者の目視候補で未承認。M1〜M15は利用者のブラウザーコメントを元画像座標へ概算変換した別系列の印。M1〜M12は窓、M13〜M14はベランダに出る扉、M15は車庫に出られる窓扉と利用者が分類した。位置の数ピクセルのずれとW1〜W5の正否は未確認。採点・正解データには未反映。",
   "windows": [
     {"id": "W1", "floor_id": "1F", "room": "洋室", "position": [0.361, 0.109], "description": "洋室の上側外壁にある短い横線"},
     {"id": "W2", "floor_id": "1F", "room": "洋室", "position": [0.453, 0.181], "description": "洋室の右側外壁にある短い縦線"},
     {"id": "W3", "floor_id": "2F", "room": "LDK", "position": [0.722, 0.195], "description": "LDKの左側外壁にある短い縦線"},
     {"id": "W4", "floor_id": "2F", "room": "LDK", "position": [0.943, 0.269], "description": "LDKの右側外壁にある短い縦線"},
     {"id": "W5", "floor_id": "2F", "room": "主寝室", "position": [0.782, 0.732], "description": "主寝室の下側外壁にある短い横線"}
-  ]
+  ],
+  "user_markers": [
+    {"id": "M1", "comment": 1, "kind": "window", "position": [0.459, 0.304]},
+    {"id": "M2", "comment": 2, "kind": "window", "position": [0.458, 0.235]},
+    {"id": "M3", "comment": 3, "kind": "window", "position": [0.460, 0.363]},
+    {"id": "M4", "comment": 4, "kind": "window", "position": [0.237, 0.270]},
+    {"id": "M5", "comment": 5, "kind": "window", "position": [0.946, 0.196]},
+    {"id": "M6", "comment": 6, "kind": "window", "position": [0.944, 0.305]},
+    {"id": "M7", "comment": 7, "kind": "window", "position": [0.945, 0.385]},
+    {"id": "M8", "comment": 8, "kind": "window", "position": [0.875, 0.591]},
+    {"id": "M9", "comment": 9, "kind": "window", "position": [0.165, 0.763]},
+    {"id": "M10", "comment": 10, "kind": "window", "position": [0.247, 0.759]},
+    {"id": "M11", "comment": 11, "kind": "window", "position": [0.639, 0.445]},
+    {"id": "M12", "comment": 12, "kind": "window", "position": [0.676, 0.324]},
+    {"id": "M13", "comment": 13, "kind": "balcony_door", "position": [0.793, 0.096]},
+    {"id": "M14", "comment": 14, "kind": "balcony_door", "position": [0.883, 0.096]},
+    {"id": "M15", "comment": 15, "kind": "garage_window_door", "position": [0.440, 0.480]}
+  ],
+  "user_marker_position_source": "browser_comment_viewport_to_original_image_estimate",
+  "user_marker_position_review_status": "approximate"
 }

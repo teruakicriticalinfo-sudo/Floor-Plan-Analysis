@@ -85,7 +85,7 @@ python targeted_vision_review.py --image sample1.webp
 
 `--refresh` で小領域を再読取、`--max-window-rooms 3` で窓を調べる部屋数を制限できます。`--structure` で別の構造JSONを指定できます。現在のキャッシュがない画像は、先に `live_backtest.py` を実行してください。sample1の実測では、Qwen 8Bは小領域化後も洗面所を「確認不能」、窓を候補なしと返しました。この結果を精度改善済みと扱わず、確認ページで未検出箇所を追跡します。
 
-sample1の窓位置を人手で確かめるための別ページは `manual_corrections/sample1_window_review.html` です。橙のW1〜W5は目視の**未承認候補**であり、モデルの検出結果や正解ラベルではありません。`manual_corrections/sample1_windows_draft.json` を修正したら次のコマンドでページを再生成できます。利用者確認が終わるまで採点やベンチマークへは反映しません。
+sample1の窓位置を人手で確かめるための別ページは `manual_corrections/sample1_window_review.html` です。橙のW1〜W5は作業者の目視による**未承認候補**です。青のM1〜M12は利用者が窓とコメントした印、紫のM13〜M14はベランダに出る扉、M15は車庫に出られる窓扉です。コメント位置は画面上の印から元画像へ概算変換しており、数ピクセルずれる可能性があります。窓と外部扉を混同せず、Qwenの検出結果や正解ラベルとも分けて保存します。`manual_corrections/sample1_windows_draft.json` を修正したら次のコマンドでページを再生成できます。位置とW1〜W5の正否が確認されるまで採点やベンチマークへは反映しません。
 
 ```powershell
 python tools/render_window_review.py
