@@ -85,13 +85,13 @@ python targeted_vision_review.py --image sample1.webp
 
 `--refresh` で小領域を再読取、`--max-window-rooms 3` で窓を調べる部屋数を制限できます。`--structure` で別の構造JSONを指定できます。現在のキャッシュがない画像は、先に `live_backtest.py` を実行してください。sample1の実測では、Qwen 8Bは小領域化後も洗面所を「確認不能」、窓を候補なしと返しました。この結果を精度改善済みと扱わず、確認ページで未検出箇所を追跡します。
 
-sample1の窓位置を人手で確かめるための別ページは `manual_corrections/sample1_window_review.html` です。緑のW1〜W5と青のM1〜M12は利用者が窓と確認した印、紫のM13〜M14はベランダに出る扉、M15は車庫に出られる窓扉です。M系列の位置は利用者が画面上で付けた印を元画像へ変換し、近くの壁・開口線へ補間しました。元の座標は`original_position`に残しています。窓と外部扉を混同せず、Qwenの検出結果とも分けて保存します。`manual_corrections/sample1_windows_draft.json` を修正したら次のコマンドでページを再生成できます。全窓の網羅性と重複はまだ未確認のため、採点や正式なベンチマークへは反映しません。
+sample1の窓位置を人手で確かめるための別ページは `manual_corrections/sample1_window_review.html` です。利用者提供の赤枠画像から24個の矩形を元画像へ位置合わせし、赤の窓矩形20個と紫の外部扉矩形4個として保存しました。矩形の個数は物理的な窓の枚数と同義ではありません。以前のW1〜W5・M1〜M15点指定は履歴として残し、位置の基準には赤枠を用います。窓と外部扉を混同せず、Qwenの検出結果とも分けて保存します。`manual_corrections/sample1_windows_draft.json` を修正したら次のコマンドでページを再生成できます。全窓の網羅性と同じ開口の片数はまだ未確認のため、採点や正式なベンチマークへは反映しません。
 
 ```powershell
 python tools/render_window_review.py
 ```
 
-確認された印に対する暫定的な検出再現率だけを測る場合は、現在の画像認識キャッシュを`--structure`に指定して`tools/evaluate_window_annotations.py`を実行します。外部扉は窓の分母から外し、未確認の網羅性を理由にprecisionと正式な全窓精度は出しません。sample1では17個の窓マーカーに対し、座標検証を通ったモデル窓は0件でした。
+確認された赤枠に対する暫定的な検出再現率だけを測る場合は、現在の画像認識キャッシュを`--structure`に指定して`tools/evaluate_window_annotations.py`を実行します。外部扉は窓の分母から外し、未確認の網羅性を理由にprecisionと正式な全窓精度は出しません。sample1では20個の窓矩形に対し、座標検証を通ったモデル窓は0件でした。
 
 正解データとの接続精度は次で測定できます。
 

@@ -19,8 +19,18 @@ def evaluate(annotation: dict, structure: dict, image_size: tuple[int, int], tol
         raise ValueError("利用者が分類を確認した注釈だけを評価します")
     if tolerance_px <= 0:
         raise ValueError("座標許容距離は正の値にしてください")
-    marks = [*annotation.get("windows", []),
-             *(item for item in annotation.get("user_markers", []) if item.get("kind") == "window")]
+    rectangles = annotation.get("reference_rectangles") or []
+    if rectangles:
+        marks = [item for item in rectangles if item.get("kind") == "window"]
+        excluded_doors = sum(item.get("kind") in {"balcony_door", "garage_window_door"}
+                             for item in rectangles)
+        unit = "user_red_rectangles"
+    else:
+        marks = [*annotation.get("windows", []),
+                 *(item for item in annotation.get("user_markers", []) if item.get("kind") == "window")]
+        excluded_doors = sum(item.get("kind") in {"balcony_door", "garage_window_door"}
+                             for item in annotation.get("user_markers", []))
+        unit = "point_markers"
     ids = [item.get("id") for item in marks]
     if len(ids) != len(set(ids)) or any(not ident for ident in ids):
         raise ValueError("窓マーカーIDが重複または欠落しています")
@@ -32,11 +42,19 @@ def evaluate(annotation: dict, structure: dict, image_size: tuple[int, int], tol
         if not isinstance(point, list) or len(point) != 2:
             continue
         for marked_index, mark in enumerate(marks):
-            target = mark.get("position")
-            if not isinstance(target, list) or len(target) != 2:
-                raise ValueError(f"注釈座標が不正です: {mark.get('id')}")
-            distance = math.hypot((point[0] - target[0]) * width,
-                                  (point[1] - target[1]) * height)
+            if rectangles:
+                box = mark.get("bbox")
+                if not isinstance(box, list) or len(box) != 4:
+                    raise ValueError(f"赤枠座標が不正です: {mark.get('id')}")
+                dx = max((box[0] - point[0]) * width, 0, (point[0] - box[2]) * width)
+                dy = max((box[1] - point[1]) * height, 0, (point[1] - box[3]) * height)
+                distance = math.hypot(dx, dy)
+            else:
+                target = mark.get("position")
+                if not isinstance(target, list) or len(target) != 2:
+                    raise ValueError(f"注釈座標が不正です: {mark.get('id')}")
+                distance = math.hypot((point[0] - target[0]) * width,
+                                      (point[1] - target[1]) * height)
             if distance <= tolerance_px:
                 choices.append((distance, predicted_index, marked_index))
     used_predictions = set()
@@ -52,13 +70,11 @@ def evaluate(annotation: dict, structure: dict, image_size: tuple[int, int], tol
                         "distance_px": round(distance, 1)})
     return {
         "classification": "user_confirmed",
+        "annotation_unit": unit,
         "coverage": annotation.get("coverage_review_status", "unknown"),
         "geometry": annotation.get("geometry_review_status", "unknown"),
         "annotated_window_markers": len(marks),
-        "annotated_exterior_doors_excluded": sum(
-            item.get("kind") in {"balcony_door", "garage_window_door"}
-            for item in annotation.get("user_markers", [])
-        ),
+        "annotated_exterior_doors_excluded": excluded_doors,
         "raw_model_windows": len(structure.get("windows", [])),
         "accepted_model_windows": len(accepted),
         "matched_markers": len(matches),
@@ -66,7 +82,7 @@ def evaluate(annotation: dict, structure: dict, image_size: tuple[int, int], tol
         "unmatched_marker_ids": [item["id"] for index, item in enumerate(marks) if index not in used_marks],
         "matches": matches,
         "precision": None,
-        "note": "これは利用者が示した窓位置に対する暫定的な再現率です。窓の網羅性・重複が未確認のため、正式な全窓ベンチマークや採点へは転用しません。外部扉は窓の分母に入れません。",
+        "note": "これは利用者が示した窓の赤枠・点に対する暫定的な再現率です。赤枠は窓の物理的な枚数と同義ではなく、網羅性も未確認です。正式な全窓ベンチマークや採点へは転用せず、外部扉は窓の分母に入れません。",
     }
 
 

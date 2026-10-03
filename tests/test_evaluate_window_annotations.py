@@ -33,6 +33,27 @@ class WindowAnnotationEvaluationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             evaluate({"classification_review_status": "draft"}, {}, (100, 100))
 
+    def test_user_rectangles_replace_old_point_history(self):
+        annotation = {
+            "classification_review_status": "user_confirmed",
+            "windows": [{"id": "W_old", "position": [0.8, 0.8]}],
+            "reference_rectangles": [
+                {"id": "R01", "kind": "window", "bbox": [0.19, 0.09, 0.22, 0.12]},
+                {"id": "R02", "kind": "balcony_door", "bbox": [0.3, 0.1, 0.4, 0.12]},
+            ],
+        }
+        structure = {
+            "spaces": [{"id": "S1", "label": "洋室", "bbox": [0, 0.1, 0.5, 0.5]}],
+            "windows": [{"id": "P1", "space_id": "S1", "position": [0.2, 0.1],
+                         "confidence": "high", "faces_exterior": True}],
+            "fixtures": [], "unreadable_items": [],
+        }
+        result = evaluate(annotation, structure, (100, 100))
+        self.assertEqual(result["annotation_unit"], "user_red_rectangles")
+        self.assertEqual(result["annotated_window_markers"], 1)
+        self.assertEqual(result["annotated_exterior_doors_excluded"], 1)
+        self.assertEqual(result["matched_markers"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

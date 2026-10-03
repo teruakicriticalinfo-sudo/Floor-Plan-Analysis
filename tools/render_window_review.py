@@ -35,6 +35,8 @@ def render(annotation: dict, image_path: Path) -> str:
         raise ValueError("候補JSONと画像のファイル名が一致しません")
     with Image.open(image_path) as image:
         width, height = image.size
+    if annotation.get("reference_rectangles"):
+        return _render_rectangles(annotation, image_path, width, height)
     marks = []
     candidate_rows = []
     marker_rows = []
@@ -77,6 +79,43 @@ def render(annotation: dict, image_path: Path) -> str:
             f'<h2>利用者が付けた印</h2><table><tr><th>番号</th><th>コメント番号</th><th>利用者の分類</th></tr>{"".join(marker_rows)}</table>'
             "<p>このページは分類を記録した作業下書きです。網羅性と重複を確認するまで、"
             "採点や正式なベンチマークの正解には反映しません。</p></html>")
+
+
+def _render_rectangles(annotation: dict, image_path: Path, width: int, height: int) -> str:
+    marks = []
+    rows = []
+    seen = set()
+    for item in annotation["reference_rectangles"]:
+        ident = str(item.get("id") or "")
+        box = item.get("bbox")
+        kind = item.get("kind")
+        if (not ident or ident in seen or kind not in MARKER_KINDS
+                or not isinstance(box, list) or len(box) != 4
+                or not all(isinstance(value, (float, int)) and not isinstance(value, bool)
+                           and 0 <= value <= 1 for value in box)
+                or box[0] >= box[2] or box[1] >= box[3]):
+            raise ValueError(f"赤枠のID・種別・座標が不正です: {ident}")
+        seen.add(ident)
+        x1, y1, x2, y2 = box[0] * width, box[1] * height, box[2] * width, box[3] * height
+        color = "#e11d27" if kind == "window" else "#7b2cbf"
+        marks.append(f'<rect x="{x1:.1f}" y="{y1:.1f}" width="{x2-x1:.1f}" height="{y2-y1:.1f}" fill="none" stroke="{color}" stroke-width="1.6"><title>{html.escape(ident)} {html.escape(MARKER_KINDS[kind])}</title></rect>')
+        marks.append(f'<text x="{x1:.1f}" y="{max(9,y1-4):.1f}" fill="{color}" font-size="9" font-weight="bold">{html.escape(ident[1:])}</text>')
+        rows.append("<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
+            ident, MARKER_KINDS[kind], item.get("group", "—"),
+        )) + "</tr>")
+    return ("<!doctype html><html lang=ja><meta charset=utf-8><title>窓・外部扉の赤枠位置</title>"
+            "<style>body{font:16px sans-serif;max-width:950px;margin:24px auto;padding:0 16px;color:#222}"
+            ".plan{position:relative;max-width:100%}.plan img{width:100%;display:block}.plan svg{position:absolute;inset:0;width:100%;height:100%}"
+            "table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #bbb;padding:7px;text-align:left}</style>"
+            "<h1>sample1 窓・外部扉の赤枠位置</h1>"
+            "<p>利用者提供画像の赤枠24か所を元画像へ位置合わせしました。赤は窓の矩形20個、紫は"
+            "ベランダ扉2片と車庫への窓扉2片です。矩形の数は物理的な窓の枚数と同義ではありません。"
+            "W1〜W5・M1〜M15の旧点指定はJSONに履歴として残し、位置の基準にはしません。</p>"
+            f'<div class="plan"><img src="{html.escape(image_path.resolve().as_uri(), quote=True)}" alt="間取り図">'
+            f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none">{"".join(marks)}</svg></div>'
+            f'<table><tr><th>赤枠ID</th><th>分類</th><th>同じ開口のグループ候補</th></tr>{"".join(rows)}</table>'
+            "<p>全窓の網羅性と、同じ開口に属する片の数は未確認です。"
+            "採点や正式な全窓ベンチマークへはまだ反映しません。</p></html>")
 
 
 def main() -> int:

@@ -56,6 +56,20 @@ class WindowReviewTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 render(annotation, image_path)
 
+    def test_user_red_rectangles_supersede_old_point_markers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "sample.webp"
+            Image.new("RGB", (100, 80), "white").save(image_path)
+            page = render({"image": "sample.webp", "review_status": "draft",
+                           "windows": [{"id": "W1", "position": [0.5, 0.25]}],
+                           "reference_rectangles": [
+                               {"id": "R01", "kind": "window", "bbox": [0.1, 0.2, 0.2, 0.3]},
+                               {"id": "R02", "kind": "balcony_door", "bbox": [0.5, 0.1, 0.6, 0.2]},
+                           ]}, image_path)
+            self.assertIn('x="10.0" y="16.0" width="10.0" height="8.0"', page)
+            self.assertIn("R02", page)
+            self.assertNotIn("W1</text>", page)
+
 
 if __name__ == "__main__":
     unittest.main()

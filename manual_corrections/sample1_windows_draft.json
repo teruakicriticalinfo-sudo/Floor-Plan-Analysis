@@ -2,10 +2,10 @@
   "image": "sample1.webp",
   "review_status": "draft",
   "source": "assistant_visual_draft",
-  "notes": "利用者はW1〜W5が窓と確認。M1〜M12は窓、M13〜M14はベランダに出る扉、M15は車庫に出られる窓扉という利用者コメント。Mの位置は画面上の印から元画像へ変換後、近傍の壁線・開口線の中心へ作業者が補間した。全窓の網羅性・重複は未確認のため、全体を正解データとしては承認しない。外部扉を通常窓に混入させない。",
+  "notes": "利用者提供の赤枠画像を最優先の位置資料とし、24個の矩形を元画像座標へ登録。W1〜W5とM1〜M15は以前の点指定の履歴として保持し、評価には赤枠を使う。ベランダへの扉2片と車庫への窓扉2片は通常窓から分けた。窓の部品・枚数の単位と全体の網羅性は未確認で、正式な全窓ベンチマークには使わない。",
   "classification_review_status": "user_confirmed",
-  "coverage_review_status": "not_confirmed",
-  "geometry_review_status": "assistant_interpolated_from_user_markers",
+  "coverage_review_status": "user_supplied_red_marks_not_proven_exhaustive",
+  "geometry_review_status": "user_image_red_rectangles_registered",
   "windows": [
     {"id": "W1", "floor_id": "1F", "room": "洋室", "position": [0.361, 0.109], "description": "洋室の上側外壁にある短い横線"},
     {"id": "W2", "floor_id": "1F", "room": "洋室", "position": [0.453, 0.181], "description": "洋室の右側外壁にある短い縦線"},
@@ -31,5 +31,38 @@
     {"id": "M15", "comment": 15, "kind": "garage_window_door", "original_position": [0.440, 0.480], "position": [0.43987, 0.48807]}
   ],
   "user_marker_position_source": "browser_comment_viewport_to_original_image_then_nearest_wall_center",
-  "user_marker_position_review_status": "interpolated_by_assistant"
+  "user_marker_position_review_status": "superseded_by_red_rectangles",
+  "reference_image": {
+    "name": "codex-clipboard-25278335-1b59-4616-896a-269bc86598f0.png",
+    "sha256": "f29ff25ee595eea94857a712f9518157d0eee59afbd5aee2d28a8feaa9d5a78e",
+    "size": [1808, 1125],
+    "registration_to_original": {"scale": 2.445, "offset_x": -8, "offset_y": -4, "original_size": [640, 461]},
+    "position_note": "赤枠ピクセルを元画像へ一様拡大・平行移動の逆変換で対応付けた。数ピクセルの誤差があり得る。"
+  },
+  "reference_rectangles": [
+    {"id": "R01", "kind": "window", "bbox": [0.33487, 0.10114, 0.35276, 0.11090], "group": "1F_bedroom_top"},
+    {"id": "R02", "kind": "window", "bbox": [0.36874, 0.10114, 0.38663, 0.11090], "group": "1F_bedroom_top"},
+    {"id": "R03", "kind": "balcony_door", "bbox": [0.75984, 0.10114, 0.78988, 0.11090], "group": "2F_LDK_balcony"},
+    {"id": "R04", "kind": "balcony_door", "bbox": [0.85187, 0.10114, 0.88190, 0.11090], "group": "2F_LDK_balcony"},
+    {"id": "R05", "kind": "window", "bbox": [0.44351, 0.16058, 0.44926, 0.19962]},
+    {"id": "R06", "kind": "window", "bbox": [0.70808, 0.17478, 0.71511, 0.23156]},
+    {"id": "R07", "kind": "window", "bbox": [0.92664, 0.17478, 0.93367, 0.23156]},
+    {"id": "R08", "kind": "window", "bbox": [0.44351, 0.22357, 0.44926, 0.26350]},
+    {"id": "R09", "kind": "window", "bbox": [0.22495, 0.27060, 0.23134, 0.29366]},
+    {"id": "R10", "kind": "window", "bbox": [0.44351, 0.28745, 0.44926, 0.32649]},
+    {"id": "R11", "kind": "window", "bbox": [0.92664, 0.30165, 0.93367, 0.32649]},
+    {"id": "R12", "kind": "window", "bbox": [0.66143, 0.31939, 0.66782, 0.35843]},
+    {"id": "R13", "kind": "window", "bbox": [0.44351, 0.35044, 0.44926, 0.39037]},
+    {"id": "R14", "kind": "window", "bbox": [0.92664, 0.38238, 0.93367, 0.40722]},
+    {"id": "R15", "kind": "window", "bbox": [0.62692, 0.43029, 0.63395, 0.48707]},
+    {"id": "R16", "kind": "garage_window_door", "bbox": [0.38088, 0.48618, 0.41092, 0.49594], "group": "1F_bedroom_garage"},
+    {"id": "R17", "kind": "garage_window_door", "bbox": [0.41411, 0.48618, 0.44415, 0.49594], "group": "1F_bedroom_garage"},
+    {"id": "R18", "kind": "window", "bbox": [0.85762, 0.57313, 0.86465, 0.62991]},
+    {"id": "R19", "kind": "window", "bbox": [0.10992, 0.60596, 0.11695, 0.66274]},
+    {"id": "R20", "kind": "window", "bbox": [0.37577, 0.60596, 0.38152, 0.64499]},
+    {"id": "R21", "kind": "window", "bbox": [0.71447, 0.72573, 0.75537, 0.73460], "group": "2F_master_bottom"},
+    {"id": "R22", "kind": "window", "bbox": [0.78285, 0.72573, 0.82375, 0.73460], "group": "2F_master_bottom"},
+    {"id": "R23", "kind": "window", "bbox": [0.13931, 0.77452, 0.17894, 0.78162]},
+    {"id": "R24", "kind": "window", "bbox": [0.23070, 0.77452, 0.24859, 0.78162]}
+  ]
 }
