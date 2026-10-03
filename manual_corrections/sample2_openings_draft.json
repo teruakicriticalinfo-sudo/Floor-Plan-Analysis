@@ -1,0 +1,33 @@
+{
+  "image": "sample2.webp",
+  "image_sha256": "3066981bb7349d0d21dea67e18073503f9bf4f4cef7af9ba4417eafa5561c9a6",
+  "image_size": [463, 480],
+  "review_status": "draft",
+  "classification_review_status": "user_confirmed",
+  "geometry_review_status": "assistant_checked_registration_user_overlay_pending",
+  "coverage_review_status": "user_red_marks_not_proven_exhaustive",
+  "notes": "利用者提供の赤枠10件を元画像に自動位置合わせし、利用者が10件すべて窓と確認。元画像への重ね合わせはアシスタントが目視確認したが、全窓の網羅性と位置合わせの最終承認は未確認。検出器の学習、採点、正式な全窓精度評価にはまだ使わない。",
+  "reference_image": {
+    "name": "codex-clipboard-ba484ac2-08a5-41e3-bd78-94e33694be43.png",
+    "sha256": "e26dc6e80b28b8883f2645a81009d4deb918539fdacb8ecc22498bd32451350d",
+    "size": [1122, 1115],
+    "registration_to_original": {
+      "scale": 2.515,
+      "offset_x": -12,
+      "offset_y": -59,
+      "method": "pixel_color_match"
+    }
+  },
+  "reference_rectangles": [
+    {"id": "R01", "kind": "window", "bbox": [0.09352, 0.15417, 0.11080, 0.27833], "source_bbox": [97, 127, 117, 277]},
+    {"id": "R02", "kind": "window", "bbox": [0.73693, 0.15417, 0.75400, 0.27833], "source_bbox": [846, 127, 866, 277]},
+    {"id": "R03", "kind": "window", "bbox": [0.09352, 0.29500, 0.11080, 0.41917], "source_bbox": [97, 297, 117, 447]},
+    {"id": "R04", "kind": "window", "bbox": [0.56760, 0.34958, 0.68099, 0.36375], "source_bbox": [649, 363, 781, 380]},
+    {"id": "R05", "kind": "window", "bbox": [0.52376, 0.40417, 0.53672, 0.45312], "source_bbox": [598, 429, 613, 488]},
+    {"id": "R06", "kind": "window", "bbox": [0.15983, 0.48208, 0.27300, 0.49625], "source_bbox": [174, 523, 306, 540]},
+    {"id": "R07", "kind": "window", "bbox": [0.73693, 0.62042, 0.75400, 0.74646], "source_bbox": [846, 690, 866, 842]},
+    {"id": "R08", "kind": "window", "bbox": [0.09352, 0.63292, 0.11080, 0.66104], "source_bbox": [97, 705, 117, 739]},
+    {"id": "R09", "kind": "window", "bbox": [0.09352, 0.83583, 0.11080, 0.87562], "source_bbox": [97, 950, 117, 998]},
+    {"id": "R10", "kind": "window", "bbox": [0.32289, 0.94354, 0.37624, 0.95667], "source_bbox": [364, 1080, 426, 1096]}
+  ]
+}

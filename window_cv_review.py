@@ -76,6 +76,10 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
         door_matches.append({"reference_id": doors[door_index]["id"],
                              "candidate_id": candidates[candidate_index]["id"],
                              "distance_px": round(distance, 1)})
+    development_image = annotation.get("image") == "sample1.webp"
+    note = ("候補は窓と断定していません。sample1は検出器の開発に使った画像で、位置一致は独立評価ではありません。赤枠の網羅性も未確認のためprecisionは計算しません。"
+            if development_image else
+            "候補は窓と断定していません。位置一致は利用者が指定した窓枠に限ります。全窓の網羅性は未確認のため、precisionや全窓recallは計算しません。")
     return {"detector_version": DETECTOR_VERSION,
             "candidate_count": len(candidates),
             "marked_window_rectangles": len(windows),
@@ -90,7 +94,7 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
             "door_matches": door_matches,
             "matches": matches,
             "precision": None,
-            "note": "候補は窓と断定していません。sample1は検出器の開発に使った画像で、位置一致は独立評価ではありません。赤枠の網羅性も未確認のためprecisionは計算しません。"}
+            "note": note}
 
 
 def migrate_review(review: dict, candidates: list[dict], image_name: str,
@@ -188,6 +192,11 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
     script_data = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
     coverage_text = (f"{evaluation['covered_marked_windows']}/{evaluation['marked_window_rectangles']}"
                      if evaluation["marked_window_rectangles"] is not None else "赤枠照合なし")
+    development_image = image_name == "sample1.webp"
+    coverage_label = "開発用赤枠の位置一致" if development_image else "指定された窓枠への位置一致"
+    coverage_note = ("位置一致はsample1での開発中の値です。窓の自動認定や独立した精度評価ではありません。"
+                     if development_image else
+                     "位置一致は指定された窓枠だけの値です。窓の自動認定や全窓の精度評価ではありません。")
     page = f"""<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>窓候補の確認 — {html.escape(image_name)}</title>
@@ -222,12 +231,12 @@ select,button{{font:inherit;padding:4px 6px}}button{{cursor:pointer}}
 <p class="small">このページは採点を変更しません。判定はブラウザ内に一時保存され、「確認結果JSONを保存」で書き出せます。</p></header>
 <main><section class="panel"><div class="controls">
 <label><input id="show-reference" type="checkbox"> 元の赤枠を表示（赤＝窓、紫＝外部扉）</label>
-<span>候補 {len(candidates)}件 / 開発用赤枠の位置一致 {coverage_text}</span>
+<span>候補 {len(candidates)}件 / {coverage_label} {coverage_text}</span>
 </div><div class="plan"><img src="data:{image_mime};base64,{encoded_image}" alt="間取り図">
 <svg viewBox="0 0 {width} {height}" preserveAspectRatio="none">
 <g id="reference-layer" style="display:none">{''.join(reference_shapes)}</g>
 {''.join(candidate_shapes)}</svg></div>
-<p class="small">位置一致はsample1での開発中の値です。窓の自動認定や独立した精度評価ではありません。</p></section>
+<p class="small">{coverage_note}</p></section>
 <aside class="panel"><div class="controls"><strong id="progress"></strong>
 <button id="export" type="button">確認結果JSONを保存</button>
 <label>JSONを読み込む<input id="import" type="file" accept=".json,application/json"></label></div>

@@ -51,6 +51,16 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertEqual(len(report["covered_exterior_door_ids"]), 1)
         self.assertEqual(len(report["missed_exterior_door_ids"]), 1)
 
+    def test_other_image_reports_marked_coverage_without_claiming_full_recall(self):
+        annotation = {"image": "sample2.webp", "classification_review_status": "user_confirmed",
+                      "reference_rectangles": [
+                          {"id": "R1", "kind": "window", "bbox": [0.1, 0.1, 0.2, 0.2]}]}
+        report = evaluate_candidate_coverage([], annotation, (100, 100))
+        self.assertEqual(report["covered_marked_windows"], 0)
+        self.assertEqual(report["missed_reference_ids"], ["R1"])
+        self.assertIn("全窓recallは計算しません", report["note"])
+        self.assertNotIn("sample1", report["note"])
+
     def test_legacy_generic_doors_require_reclassification(self):
         image_bytes = b"review-image"
         candidates = [{"id": "C001", "bbox": [0.1, 0.2, 0.2, 0.3], "orientation": "vertical"},
@@ -96,6 +106,8 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertIn("image_sha256", page)
         self.assertIn("review_status", page)
         self.assertIn("data.schema_version===1", page)
+        self.assertIn("指定された窓枠への位置一致", page)
+        self.assertNotIn("sample1での開発中", page)
 
 
 if __name__ == "__main__":
