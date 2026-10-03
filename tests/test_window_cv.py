@@ -1,4 +1,5 @@
 import io
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from floor_plan.window_cv import detect_wall_gap_candidates
-from window_cv_review import evaluate_candidate_coverage, render_review_page
+from window_cv_review import evaluate_candidate_coverage, migrate_review, render_review_page
 
 
 class WallGapDetectionTests(unittest.TestCase):
@@ -40,6 +41,36 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertEqual(report["covered_exterior_door_ids"], ["R2"])
         self.assertIsNone(report["precision"])
 
+    def test_one_candidate_cannot_cover_two_door_rectangles(self):
+        candidates = [{"id": "C001", "bbox": [0.4, 0.2, 0.5, 0.25]}]
+        annotation = {"classification_review_status": "user_confirmed",
+                      "reference_rectangles": [
+                          {"id": "R1", "kind": "balcony_door", "bbox": [0.4, 0.2, 0.5, 0.25]},
+                          {"id": "R2", "kind": "balcony_door", "bbox": [0.51, 0.2, 0.56, 0.25]}]}
+        report = evaluate_candidate_coverage(candidates, annotation, (100, 100))
+        self.assertEqual(len(report["covered_exterior_door_ids"]), 1)
+        self.assertEqual(len(report["missed_exterior_door_ids"]), 1)
+
+    def test_legacy_generic_doors_require_reclassification(self):
+        image_bytes = b"review-image"
+        candidates = [{"id": "C001", "bbox": [0.1, 0.2, 0.2, 0.3], "orientation": "vertical"},
+                      {"id": "C002", "bbox": [0.5, 0.2, 0.6, 0.3], "orientation": "vertical"}]
+        review = {"schema_version": 1, "image": "sample.webp",
+                  "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+                  "detector_version": "wall-gap-v1",
+                  "decisions": [{"candidate_id": "C001", "bbox": candidates[0]["bbox"],
+                                 "orientation": "vertical", "classification": "window"},
+                                {"candidate_id": "C002", "bbox": candidates[1]["bbox"],
+                                 "orientation": "vertical", "classification": "exterior_door"}]}
+        migrated = migrate_review(review, candidates, "sample.webp", image_bytes)
+        self.assertEqual(migrated["schema_version"], 2)
+        self.assertEqual(migrated["review_status"], "draft")
+        self.assertEqual([item["classification"] for item in migrated["decisions"]],
+                         ["window", "door_unclassified"])
+        review["decisions"][1]["bbox"] = [0, 0, 1, 1]
+        with self.assertRaises(ValueError):
+            migrate_review(review, candidates, "sample.webp", image_bytes)
+
     def test_review_page_exports_decisions_and_hides_reference_by_default(self):
         image = Image.new("RGB", (30, 30), "white")
         buffer = io.BytesIO()
@@ -58,10 +89,13 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertIn('id="reference-layer" style="display:none"', page)
         self.assertIn('value="window"', page)
         self.assertIn('value="exterior_door"', page)
+        self.assertIn('value="interior_door"', page)
+        self.assertIn('value="door_unclassified"', page)
         self.assertIn('value="uncertain"', page)
         self.assertIn("確認結果JSONを保存", page)
         self.assertIn("image_sha256", page)
         self.assertIn("review_status", page)
+        self.assertIn("data.schema_version===1", page)
 
 
 if __name__ == "__main__":

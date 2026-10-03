@@ -18,6 +18,7 @@ from floor_plan.window_cv import DETECTOR_VERSION, detect_wall_gap_candidates
 
 
 ROOT = Path(__file__).resolve().parent
+REVIEW_SCHEMA_VERSION = 2
 
 
 def _distance_to_box(point: tuple[float, float], box: list[float], size: tuple[int, int]) -> float:
@@ -56,12 +57,25 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
         matches.append({"reference_id": windows[reference_index]["id"],
                         "candidate_id": candidates[candidate_index]["id"],
                         "distance_px": round(distance, 1)})
-    covered_doors = []
-    for door in doors:
-        if any(_distance_to_box(((candidate["bbox"][0] + candidate["bbox"][2]) / 2,
-                                 (candidate["bbox"][1] + candidate["bbox"][3]) / 2),
-                                door["bbox"], image_size) <= tolerance_px for candidate in candidates):
-            covered_doors.append(door["id"])
+    door_edges = []
+    for candidate_index, candidate in enumerate(candidates):
+        box = candidate["bbox"]
+        center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+        for door_index, door in enumerate(doors):
+            distance = _distance_to_box(center, door["bbox"], image_size)
+            if distance <= tolerance_px:
+                door_edges.append((distance, candidate_index, door_index))
+    used_door_candidates = set()
+    used_doors = set()
+    door_matches = []
+    for distance, candidate_index, door_index in sorted(door_edges):
+        if candidate_index in used_door_candidates or door_index in used_doors:
+            continue
+        used_door_candidates.add(candidate_index)
+        used_doors.add(door_index)
+        door_matches.append({"reference_id": doors[door_index]["id"],
+                             "candidate_id": candidates[candidate_index]["id"],
+                             "distance_px": round(distance, 1)})
     return {"detector_version": DETECTOR_VERSION,
             "candidate_count": len(candidates),
             "marked_window_rectangles": len(windows),
@@ -70,15 +84,66 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
             "missed_reference_ids": [item["id"] for index, item in enumerate(windows)
                                      if index not in used_windows],
             "marked_exterior_door_rectangles": len(doors),
-            "covered_exterior_door_ids": covered_doors,
+            "covered_exterior_door_ids": [item["reference_id"] for item in door_matches],
+            "missed_exterior_door_ids": [item["id"] for index, item in enumerate(doors)
+                                         if index not in used_doors],
+            "door_matches": door_matches,
             "matches": matches,
             "precision": None,
             "note": "候補は窓と断定していません。sample1は検出器の開発に使った画像で、位置一致は独立評価ではありません。赤枠の網羅性も未確認のためprecisionは計算しません。"}
 
 
+def migrate_review(review: dict, candidates: list[dict], image_name: str,
+                   image_bytes: bytes) -> dict:
+    """Validate a downloaded review and make legacy generic doors unresolved."""
+    version = review.get("schema_version")
+    if version not in {1, REVIEW_SCHEMA_VERSION}:
+        raise ValueError("確認JSONの形式が不正です")
+    if (review.get("image") != image_name
+            or review.get("image_sha256") != hashlib.sha256(image_bytes).hexdigest()
+            or review.get("detector_version") != DETECTOR_VERSION):
+        raise ValueError("確認JSONの画像または検出器の版が一致しません")
+    source_decisions = review.get("decisions")
+    if not isinstance(source_decisions, list) or len(source_decisions) != len(candidates):
+        raise ValueError("確認JSONの候補件数が一致しません")
+    by_id = {item["id"]: item for item in candidates}
+    normalized = []
+    seen = set()
+    allowed = {"unreviewed", "window", "interior_door", "exterior_door",
+               "door_unclassified", "not_opening", "uncertain"}
+    for decision in source_decisions:
+        ident = decision.get("candidate_id")
+        if ident not in by_id or ident in seen:
+            raise ValueError("確認JSONの候補IDが不正または重複しています")
+        candidate = by_id[ident]
+        if (decision.get("bbox") != candidate["bbox"]
+                or decision.get("orientation") != candidate["orientation"]):
+            raise ValueError(f"確認JSONの候補位置が一致しません: {ident}")
+        classification = decision.get("classification")
+        if classification not in allowed:
+            raise ValueError(f"確認JSONの分類が不正です: {ident}")
+        if version == 1 and classification == "exterior_door":
+            classification = "door_unclassified"
+        normalized.append({"candidate_id": ident, "bbox": candidate["bbox"],
+                           "orientation": candidate["orientation"],
+                           "classification": classification})
+        seen.add(ident)
+    normalized.sort(key=lambda item: item["candidate_id"])
+    unresolved = {"unreviewed", "door_unclassified"}
+    return {"schema_version": REVIEW_SCHEMA_VERSION, "image": image_name,
+            "image_sha256": review["image_sha256"], "detector_version": DETECTOR_VERSION,
+            "review_status": ("draft" if any(item["classification"] in unresolved for item in normalized)
+                              else "user_reviewed"),
+            "source_schema_version": version,
+            "notes": "旧形式の外部扉は扉全般として選ばれたため、内外未分類に変換。採点には自動反映しない。"
+            if version == 1 else "採点には自動反映しない。",
+            "decisions": normalized}
+
+
 def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[int, int],
                        candidates: list[dict], evaluation: dict,
-                       annotation: dict, output: Path) -> None:
+                       annotation: dict, output: Path,
+                       initial_decisions: dict[str, str] | None = None) -> None:
     width, height = image_size
     fingerprint = hashlib.sha256(image_bytes).hexdigest()
     image_mime = mimetypes.guess_type(image_name)[0] or "application/octet-stream"
@@ -100,7 +165,9 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
             f'<select aria-label="{ident} の判定" data-id="{ident}">'
             '<option value="unreviewed">未判定</option>'
             '<option value="window">窓</option>'
+            '<option value="interior_door">室内扉</option>'
             '<option value="exterior_door">外部扉</option>'
+            '<option value="door_unclassified">扉（内外未分類）</option>'
             '<option value="not_opening">窓・扉ではない</option>'
             '<option value="uncertain">判別不能</option>'
             '</select></label>')
@@ -114,6 +181,7 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
             f'fill="none" stroke="{color}" stroke-width="1.5"/>')
     data = {"image": image_name, "image_sha256": fingerprint,
             "detector_version": DETECTOR_VERSION,
+            "initial_decisions": initial_decisions or {},
             "candidates": [{"id": candidate["id"], "bbox": candidate["bbox"],
                             "orientation": candidate["orientation"]} for candidate in candidates],
             "candidate_ids": [candidate["id"] for candidate in candidates]}
@@ -136,6 +204,8 @@ main{{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:18p
 .candidate text{{font-size:7px;font-weight:700;fill:#004a80;pointer-events:none;paint-order:stroke;stroke:white;stroke-width:2px}}
 .candidate[data-status="window"] .outline{{stroke:#159447;stroke-width:2.3}}
 .candidate[data-status="exterior_door"] .outline{{stroke:#bd6b00;stroke-width:2.3}}
+.candidate[data-status="interior_door"] .outline{{stroke:#0f766e;stroke-width:2.3}}
+.candidate[data-status="door_unclassified"] .outline{{stroke:#eab308;stroke-width:2.3}}
 .candidate[data-status="not_opening"] .outline{{stroke:#9ca3af}}
 .candidate[data-status="uncertain"] .outline{{stroke:#8b5cf6;stroke-width:2.3}}
 .candidate.selected .outline{{stroke-width:3.5}}
@@ -148,7 +218,7 @@ select,button{{font:inherit;padding:4px 6px}}button{{cursor:pointer}}
 @media(max-width:900px){{main{{grid-template-columns:1fr}}.review-list{{max-height:none}}}}
 </style>
 <header><h1>窓候補の確認 — {html.escape(image_name)}</h1>
-<p>青は画像処理が見つけた「壁線の切れ目」です。窓とは限りません。候補をクリックして分類してください。</p>
+<p>青は画像処理が見つけた「壁線の切れ目」です。窓とは限りません。候補をクリックし、室内扉と外部扉も分けて分類してください。</p>
 <p class="small">このページは採点を変更しません。判定はブラウザ内に一時保存され、「確認結果JSONを保存」で書き出せます。</p></header>
 <main><section class="panel"><div class="controls">
 <label><input id="show-reference" type="checkbox"> 元の赤枠を表示（赤＝窓、紫＝外部扉）</label>
@@ -161,22 +231,29 @@ select,button{{font:inherit;padding:4px 6px}}button{{cursor:pointer}}
 <aside class="panel"><div class="controls"><strong id="progress"></strong>
 <button id="export" type="button">確認結果JSONを保存</button>
 <label>JSONを読み込む<input id="import" type="file" accept=".json,application/json"></label></div>
+<p id="import-note" class="small">旧版のJSONを読み込むと、「外部扉」は内外未分類に戻ります。扉だけ再確認してください。</p>
 <div class="review-list">{''.join(rows)}</div></aside></main>
 <script>
 const meta = {script_data};
-const valid = new Set(['unreviewed','window','exterior_door','not_opening','uncertain']);
-const storageKey = `window-cv-review:${{meta.image_sha256}}:${{meta.detector_version}}`;
-let decisions = {{}};
-try {{ decisions = JSON.parse(localStorage.getItem(storageKey) || '{{}}'); }} catch (_) {{ decisions = {{}}; }}
+const valid = new Set(['unreviewed','window','interior_door','exterior_door','door_unclassified','not_opening','uncertain']);
+const unresolved = new Set(['unreviewed','door_unclassified']);
+const storageKey = `window-cv-review-v2:${{meta.image_sha256}}:${{meta.detector_version}}`;
+let decisions = {{...meta.initial_decisions}};
+try {{
+  const saved = JSON.parse(localStorage.getItem(storageKey) || '{{}}');
+  if(Object.keys(saved).length) decisions = saved;
+}} catch (_) {{}}
 function render() {{
-  let reviewed = 0;
+  let reviewed = 0, unclassifiedDoors = 0;
   for (const id of meta.candidate_ids) {{
     const choice = valid.has(decisions[id]) ? decisions[id] : 'unreviewed';
-    if (choice !== 'unreviewed') reviewed++;
+    if (!unresolved.has(choice)) reviewed++;
+    if (choice === 'door_unclassified') unclassifiedDoors++;
     document.querySelector(`select[data-id="${{id}}"]`).value = choice;
     document.querySelector(`g.candidate[data-id="${{id}}"]`).dataset.status = choice;
   }}
-  document.getElementById('progress').textContent = `判定済み ${{reviewed}}/${{meta.candidate_ids.length}}`;
+  document.getElementById('progress').textContent =
+    `分類確定 ${{reviewed}}/${{meta.candidate_ids.length}}・内外未分類の扉 ${{unclassifiedDoors}}`;
 }}
 for (const select of document.querySelectorAll('select[data-id]')) {{
   select.addEventListener('change', () => {{
@@ -200,8 +277,8 @@ document.getElementById('show-reference').addEventListener('change', event => {{
 document.getElementById('export').addEventListener('click', () => {{
   const entries = meta.candidates.map(item => ({{candidate_id:item.id,bbox:item.bbox,
     orientation:item.orientation,classification:decisions[item.id] || 'unreviewed'}}));
-  const payload = {{schema_version:1,image:meta.image,image_sha256:meta.image_sha256,
-    detector_version:meta.detector_version,review_status:entries.every(x => x.classification !== 'unreviewed')
+  const payload = {{schema_version:{REVIEW_SCHEMA_VERSION},image:meta.image,image_sha256:meta.image_sha256,
+    detector_version:meta.detector_version,review_status:entries.every(x => !unresolved.has(x.classification))
     ? 'user_reviewed' : 'draft',decisions:entries}};
   const blob = new Blob([JSON.stringify(payload,null,2)],{{type:'application/json'}});
   const link = document.createElement('a');link.href=URL.createObjectURL(blob);
@@ -214,12 +291,21 @@ document.getElementById('import').addEventListener('change', async event => {{
     const data=JSON.parse(await file.text());
     if(data.image_sha256!==meta.image_sha256 || data.detector_version!==meta.detector_version)
       throw new Error('画像または検出器の版が異なります');
+    if(data.schema_version!==1 && data.schema_version!=={REVIEW_SCHEMA_VERSION})
+      throw new Error('確認JSONの形式が異なります');
     const allowed=new Set(meta.candidate_ids);decisions={{}};
-    for(const item of data.decisions || [])
-      if(allowed.has(item.candidate_id) && valid.has(item.classification))
-        decisions[item.candidate_id]=item.classification;
+    let legacyDoors=0;
+    for(const item of data.decisions || []) {{
+      if(!allowed.has(item.candidate_id) || !valid.has(item.classification)) continue;
+      if(data.schema_version===1 && item.classification==='exterior_door') {{
+        decisions[item.candidate_id]='door_unclassified';legacyDoors++;
+      }} else decisions[item.candidate_id]=item.classification;
+    }}
     try {{ localStorage.setItem(storageKey,JSON.stringify(decisions)); }} catch (_) {{}}
     render();
+    document.getElementById('import-note').textContent = legacyDoors
+      ? `旧版の扉 ${{legacyDoors}} 件を内外未分類に戻しました。室内扉・外部扉を選び直してください。`
+      : 'JSONを読み込みました。';
   }} catch(error) {{ alert('JSONを読み込めません: '+error.message); }}
 }});
 render();
@@ -234,6 +320,8 @@ def main() -> int:
     parser.add_argument("--image", type=Path, default=Path("floor_sample/sample1.webp"))
     parser.add_argument("--annotations", type=Path,
                         help="照合する赤枠JSON。sample1.webpでは省略時に既存の赤枠を使用")
+    parser.add_argument("--review-file", type=Path,
+                        help="以前に保存した確認JSON。旧形式の扉は内外未分類に変換して再確認ページへ反映")
     parser.add_argument("--output-dir", type=Path, default=Path("targeted_vision_results"))
     args = parser.parse_args()
     image_path = (ROOT / args.image).resolve()
@@ -269,9 +357,23 @@ def main() -> int:
                       "note": "赤枠がないため候補位置の精度は未測定です。候補は窓と断定していません。"}
     evaluation_path = output_dir / f"{stem}.coverage.json"
     evaluation_path.write_text(json.dumps(evaluation, ensure_ascii=False, indent=2), encoding="utf-8")
-    review_path = output_dir / f"{stem}.review.html"
+    initial_decisions = None
+    if args.review_file:
+        source_path = (ROOT / args.review_file).resolve()
+        if not source_path.is_file():
+            parser.error(f"確認JSONがありません: {source_path}")
+        source_review = json.loads(source_path.read_text(encoding="utf-8"))
+        migrated = migrate_review(source_review, candidates, image_path.name, image_bytes)
+        draft_path = output_dir / f"{stem}.review_draft.json"
+        draft_path.write_text(json.dumps(migrated, ensure_ascii=False, indent=2), encoding="utf-8")
+        initial_decisions = {item["candidate_id"]: item["classification"]
+                             for item in migrated["decisions"]}
+        print(f"既存の確認結果を読込: {len(initial_decisions)}件、内外未分類の扉 "
+              f"{sum(value == 'door_unclassified' for value in initial_decisions.values())}件")
+        print(f"再確認用の下書きJSON: {draft_path}")
+    review_path = output_dir / f"{stem}.{'recheck' if args.review_file else 'review'}.html"
     render_review_page(image_bytes, image_path.name, image_size,
-                       candidates, evaluation, annotation, review_path)
+                       candidates, evaluation, annotation, review_path, initial_decisions)
     if evaluation["marked_window_rectangles"] is None:
         print(f"候補 {len(candidates)}件、赤枠照合なし")
     else:
