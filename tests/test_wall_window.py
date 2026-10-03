@@ -73,6 +73,12 @@ class WallWindowTests(unittest.TestCase):
         self.assertIsNone(_rejection_reason({"kind": "window", "confidence": "medium",
                                               "bbox": [0.1, 0.1, 0.108, 0.16]}, (640, 461)))
 
+    def test_whole_patch_door_box_is_rejected_as_unlocalized(self):
+        reason = _rejection_reason({"kind": "balcony_door", "confidence": "high",
+                                    "bbox": [0.15, 0.6, 0.375, 0.91236]},
+                                   (640, 461), [96, 277, 240, 421])
+        self.assertEqual(reason, "切出し全体を囲むため開口位置が特定できない")
+
 
 if __name__ == "__main__":
     unittest.main()

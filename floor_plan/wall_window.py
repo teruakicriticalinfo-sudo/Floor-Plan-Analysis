@@ -137,8 +137,9 @@ def scan_patches(image: Image.Image, patches: list[dict[str, Any]], client: Any,
     raw = [item for result in completed.values() for item in result.get("detections", [])]
     accepted = []
     rejected = []
+    patch_boxes = {patch["id"]: patch["pixel_bbox"] for patch in patches}
     for item in raw:
-        reason = _rejection_reason(item, image.size)
+        reason = _rejection_reason(item, image.size, patch_boxes.get(item["patch_id"]))
         if reason:
             rejected.append({**item, "rejection_reason": reason})
         else:
@@ -149,13 +150,16 @@ def scan_patches(image: Image.Image, patches: list[dict[str, Any]], client: Any,
             "accepted_detections": deduplicate(accepted, image.size)}
 
 
-def _rejection_reason(item: dict[str, Any], image_size: tuple[int, int]) -> str | None:
+def _rejection_reason(item: dict[str, Any], image_size: tuple[int, int],
+                      patch_box: list[int] | None = None) -> str | None:
     if item.get("confidence") not in {"high", "medium"}:
         return "低確信度"
+    box = item["bbox"]
+    width = (box[2] - box[0]) * image_size[0]
+    height = (box[3] - box[1]) * image_size[1]
+    if patch_box and width >= 0.85 * (patch_box[2] - patch_box[0]) and height >= 0.85 * (patch_box[3] - patch_box[1]):
+        return "切出し全体を囲むため開口位置が特定できない"
     if item.get("kind") == "window":
-        box = item["bbox"]
-        width = (box[2] - box[0]) * image_size[0]
-        height = (box[3] - box[1]) * image_size[1]
         if min(width, height) > 12 or max(width, height) / max(min(width, height), 0.1) < 1.8:
             return "細長い窓記号の形状ではない"
     return None

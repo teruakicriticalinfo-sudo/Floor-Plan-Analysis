@@ -64,6 +64,8 @@ def evaluate_detections(result: dict, annotation: dict, size: tuple[int, int], t
         "raw_window_candidates": sum(item["kind"] == "window" for item in result.get("raw_detections", [])),
         "rejected_window_candidates": sum(item["kind"] == "window" for item in result.get("rejected_detections", [])),
         "accepted_window_candidates": len(predicted_windows),
+        "raw_exterior_door_candidates": sum(item["kind"] != "window" for item in result.get("raw_detections", [])),
+        "rejected_exterior_door_candidates": sum(item["kind"] != "window" for item in result.get("rejected_detections", [])),
         "accepted_exterior_door_candidates": sum(item["kind"] != "window" for item in result["accepted_detections"]),
         "matched_window_rectangles": len(matches),
         "recall_on_marked_rectangles": round(len(matches) / len(windows), 3) if windows else None,
