@@ -77,14 +77,19 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
                              "candidate_id": candidates[candidate_index]["id"],
                              "distance_px": round(distance, 1)})
     development_image = annotation.get("image") == "sample1.webp"
+    reference_complete = (annotation.get("review_status") == "approved"
+                          and annotation.get("coverage_review_status") == "user_confirmed_no_missing_windows")
     note = ("候補は窓と断定していません。sample1は検出器の開発に使った画像で、位置一致は独立評価ではありません。赤枠の網羅性も未確認のためprecisionは計算しません。"
             if development_image else
+            "利用者がこの画像の全窓位置を確認した矩形に対する候補位置一致です。矩形数は物理的な窓の枚数と同義ではありません。候補を窓と断定していないためprecisionは計算しません。"
+            if reference_complete else
             "候補は窓と断定していません。位置一致は利用者が指定した窓枠に限ります。全窓の網羅性は未確認のため、precisionや全窓recallは計算しません。")
     return {"detector_version": DETECTOR_VERSION,
             "candidate_count": len(candidates),
             "marked_window_rectangles": len(windows),
             "covered_marked_windows": len(matches),
             "marked_window_coverage": round(len(matches) / len(windows), 3) if windows else None,
+            "window_reference_complete": reference_complete,
             "missed_reference_ids": [item["id"] for index, item in enumerate(windows)
                                      if index not in used_windows],
             "marked_exterior_door_rectangles": len(doors),
@@ -193,9 +198,13 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
     coverage_text = (f"{evaluation['covered_marked_windows']}/{evaluation['marked_window_rectangles']}"
                      if evaluation["marked_window_rectangles"] is not None else "赤枠照合なし")
     development_image = image_name == "sample1.webp"
+    reference_complete = (annotation.get("review_status") == "approved"
+                          and annotation.get("coverage_review_status") == "user_confirmed_no_missing_windows")
     coverage_label = "開発用赤枠の位置一致" if development_image else "指定された窓枠への位置一致"
     coverage_note = ("位置一致はsample1での開発中の値です。窓の自動認定や独立した精度評価ではありません。"
                      if development_image else
+                     "利用者が全窓位置を確認した矩形への候補位置一致です。窓としての正答率や採点結果ではありません。"
+                     if reference_complete else
                      "位置一致は指定された窓枠だけの値です。窓の自動認定や全窓の精度評価ではありません。")
     page = f"""<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

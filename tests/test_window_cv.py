@@ -61,6 +61,21 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertIn("全窓recallは計算しません", report["note"])
         self.assertNotIn("sample1", report["note"])
 
+    def test_user_confirmed_complete_reference_reports_rectangle_coverage(self):
+        annotation = {"image": "sample2.webp", "review_status": "approved",
+                      "classification_review_status": "user_confirmed",
+                      "coverage_review_status": "user_confirmed_no_missing_windows",
+                      "reference_rectangles": [
+                          {"id": "R1", "kind": "window", "bbox": [0.1, 0.1, 0.2, 0.2]}]}
+        report = evaluate_candidate_coverage([], annotation, (100, 100))
+        self.assertTrue(report["window_reference_complete"])
+        self.assertEqual(report["marked_window_coverage"], 0)
+        self.assertIn("全窓位置を確認", report["note"])
+        self.assertIsNone(report["precision"])
+        annotation["review_status"] = "draft"
+        draft_report = evaluate_candidate_coverage([], annotation, (100, 100))
+        self.assertFalse(draft_report["window_reference_complete"])
+
     def test_legacy_generic_doors_require_reclassification(self):
         image_bytes = b"review-image"
         candidates = [{"id": "C001", "bbox": [0.1, 0.2, 0.2, 0.3], "orientation": "vertical"},

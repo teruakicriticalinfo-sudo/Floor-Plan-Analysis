@@ -132,7 +132,7 @@ python window_cv_review.py --review-file "C:\Users\teru\Downloads\sample1_window
 
 再確認済みの分類は `manual_corrections/sample1_window_cv_review.json` に保存しています。42候補の内訳は窓21件、室内扉7件、外部扉4件、非開口10件で、未分類はありません。画像ハッシュ・候補ID・位置の照合を通した人手ラベルですが、採点やモデルの推論結果には自動反映しません。既知の赤枠20窓との一致は検出器の開発に使った同じ画像での確認値であり、独立した精度評価ではありません。
 
-別画像のsample2では、利用者が赤枠10件をすべて窓と確認しました。元画像へ位置合わせした下書きは `manual_corrections/sample2_openings_draft.json`、重ね合わせ画像は `targeted_vision_results/sample2.user_redboxes.registration.png` です。現行検出器の候補は1件で、指定された窓枠への位置一致は0/10件でした。赤枠の全窓網羅性と位置合わせの最終承認は未確認のため、正式な全窓recallやprecisionは出しません。この描画スタイルに現行検出器を適用して採点しないでください。
+別画像のsample2では、利用者が赤枠10件すべてを窓と確認し、元画像への重ね合わせ位置と窓の付け漏れがないことも確認しました。承認済みの矩形は `manual_corrections/sample2_windows.json`、重ね合わせ画像は `targeted_vision_results/sample2.user_redboxes.registration.png` です。現行検出器の候補は1件で、承認済みの窓矩形への位置一致は0/10件でした。これはsample1を使って調整した検出器の別画像での結果です。矩形数は物理的な窓の枚数と同義ではなく、候補を窓と判定する機能もないためprecisionは出しません。この描画スタイルに現行検出器を適用して採点しないでください。
 
 赤枠がまだない別画像でも候補と確認ページを作れます。この場合は位置一致を未測定と表示します。
 
