@@ -77,6 +77,14 @@ python live_backtest.py --no-cache
 python live_backtest.py --input-dir floor_sample --results-dir backtest_results/floor_sample --image sample1.webp --repair-fallbacks
 ```
 
+洗面所の取り違えや窓の見落としを調べるときは、現在の構造キャッシュを使って該当箇所だけ拡大再読取できます。洗面所は浴室との周辺領域、窓は居室の外壁に近い細帯を調べます。読取位置を元画像へ戻し、部屋外周との距離・確信度を記録した確認ページとJSONを `targeted_vision_results` に保存します。承認済みの手動補正範囲は金色の破線で表示します。候補は誤認防止のため採点・正解データには自動反映しません。画像や構造キャッシュが変わらなければ小領域の結果も再利用します。
+
+```powershell
+python targeted_vision_review.py --image sample1.webp
+```
+
+`--refresh` で小領域を再読取、`--max-window-rooms 3` で窓を調べる部屋数を制限できます。`--structure` で別の構造JSONを指定できます。現在のキャッシュがない画像は、先に `live_backtest.py` を実行してください。sample1の実測では、Qwen 8Bは小領域化後も洗面所を「確認不能」、窓を候補なしと返しました。この結果を精度改善済みと扱わず、確認ページで未検出箇所を追跡します。
+
 正解データとの接続精度は次で測定できます。
 
 ```powershell
@@ -114,6 +122,8 @@ python tools/prepare_ground_truth.py --images-dir floor_sample --ground-truth-di
 ```powershell
 python tools/evaluate_benchmark.py --structure-dir backtest_results/floor_sample --ground-truth-dir ground_truth/floor_sample --model qwen3-vl_8b-instruct-q4_K_M --output backtest_results/floor_sample/benchmark.json
 ```
+
+集計には画像総数、構造JSONがある件数、正解データの確認状態も含まれます。承認済み正解データが0件のときはprecision/recall/F1を`null`とし、未測定の精度を0%と誤表示しません。
 
 ## 位置・接続の人手補正
 

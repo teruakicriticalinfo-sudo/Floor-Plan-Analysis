@@ -5,6 +5,7 @@ __pycache__/
 .streamlit/
 backtest_results/
 .analysis_cache/
+targeted_vision_results/
 floor_photo/*
 !floor_photo/.gitkeep
 floor_sample/*

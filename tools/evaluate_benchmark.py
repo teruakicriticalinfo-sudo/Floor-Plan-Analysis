@@ -35,10 +35,16 @@ def main() -> int:
 
     rows = []
     skipped = []
+    statuses: dict[str, int] = {}
+    structure_count = 0
     for truth_path in sorted(args.ground_truth_dir.glob("*.json")):
         if truth_path.name == "benchmark_manifest.json":
             continue
         truth = json.loads(truth_path.read_text(encoding="utf-8"))
+        status = str(truth.get("review_status") or "missing")
+        statuses[status] = statuses.get(status, 0) + 1
+        if structure_for_truth(args.structure_dir, truth, args.model) is not None:
+            structure_count += 1
         if truth.get("review_status") != "approved":
             skipped.append({"ground_truth": truth_path.name, "reason": "未確認"})
             continue
@@ -52,16 +58,19 @@ def main() -> int:
     true_positive = sum(len(row["true_positive"]) for row in rows)
     false_positive = sum(len(row["false_positive"]) for row in rows)
     false_negative = sum(len(row["false_negative"]) for row in rows)
-    precision = true_positive / (true_positive + false_positive) if true_positive + false_positive else 0.0
-    recall = true_positive / (true_positive + false_negative) if true_positive + false_negative else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    precision = true_positive / (true_positive + false_positive) if true_positive + false_positive else None
+    recall = true_positive / (true_positive + false_negative) if true_positive + false_negative else None
+    f1 = 2 * precision * recall / (precision + recall) if precision is not None and recall is not None and precision + recall else None
     report = {
+        "total_images": sum(statuses.values()),
+        "structure_count": structure_count,
+        "ground_truth_statuses": statuses,
         "approved_count": len(rows),
         "skipped_count": len(skipped),
         "micro_average": {
-            "precision": round(precision, 3),
-            "recall": round(recall, 3),
-            "f1": round(f1, 3),
+            "precision": round(precision, 3) if precision is not None and rows else None,
+            "recall": round(recall, 3) if recall is not None and rows else None,
+            "f1": round(f1, 3) if f1 is not None and rows else None,
             "true_positive": true_positive,
             "false_positive": false_positive,
             "false_negative": false_negative,
