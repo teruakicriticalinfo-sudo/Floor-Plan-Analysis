@@ -1,4 +1,6 @@
+import json
 import unittest
+from pathlib import Path
 
 from floor_plan.corrections import apply_reviewed_corrections
 from floor_plan.analyzer import analyze_from_structure
@@ -64,6 +66,19 @@ class CorrectionTests(unittest.TestCase):
         bad = {**approved, "spaces": {"hall": {"bbox": [0.4, 0.1, 0.25, 0.8]}}}
         with self.assertRaisesRegex(ValueError, "bbox"):
             apply_reviewed_corrections(self.structure, bad)
+
+    def test_sample1_reviewed_correction_preserves_confirmed_toilet_connection(self):
+        path = Path(__file__).resolve().parents[1] / "manual_corrections" / "sample1.json"
+        corrections = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(corrections["review_status"], "approved")
+        self.assertEqual(corrections["bbox_review_status"], "approved")
+        self.assertEqual(corrections["opening_position_review_status"], "approved")
+        self.assertEqual(corrections["spaces"]["S7"]["bbox"], [0.209, 0.664, 0.266, 0.779])
+        self.assertEqual(len(corrections["connections"]), 4)
+        self.assertIn(
+            ("R1_HALL", "S7", (0.245, 0.664)),
+            {(item["space_a"], item["space_b"], tuple(item["position"])) for item in corrections["connections"]},
+        )
 
 
 if __name__ == "__main__":

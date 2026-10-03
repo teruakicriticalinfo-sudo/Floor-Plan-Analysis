@@ -117,18 +117,20 @@ python tools/evaluate_benchmark.py --structure-dir backtest_results/floor_sample
 
 ## 位置・接続の人手補正
 
-小さな画像ではローカル8Bモデルの座標が不安定な場合があります。`manual_corrections/sample1.json` には、利用者が確認した3つの直接接続と廊下・水回り・階段の色枠を記録しています。開口位置の赤丸はまだ確認待ちなので、全体は下書きのままで通常は適用されません。次のコマンドは下書きの効果を別ファイルで試算するだけで、モデル本来の精度を示すベンチマークには含めません。
+小さな画像ではローカル8Bモデルの座標が不安定な場合があります。`manual_corrections/sample1.json` には、利用者が確認した4つの直接接続、5つの部屋範囲、4つの開口位置を記録しています。この補正は承認済みですが、人手補正後の精度はモデル本来の精度を示すベンチマークには含めません。
 
 `manual_corrections/sample1_review.html` をブラウザで開くと、元画像に補正候補の範囲と開口位置を重ねて確認できます。
 
 ```powershell
-python tools/apply_reviewed_corrections.py --structure backtest_results/floor_sample_hall_repair/sample1__qwen3-vl_8b-instruct-q4_K_M.structure.json --corrections manual_corrections/sample1.json --output backtest_results/manual_preview/sample1.structure.json --preview-draft
+python tools/apply_reviewed_corrections.py --structure backtest_results/floor_sample_hall_repair/sample1__qwen3-vl_8b-instruct-q4_K_M.structure.json --corrections manual_corrections/sample1.json --output backtest_results/manual_reviewed/sample1.structure.json
 ```
 
-通常のバックテストに補正を明示的に組み込む場合は `--corrections-dir manual_corrections` を付けます。下書きは自動的にスキップされ、`--preview-draft-corrections` を追加した場合だけ採点保留の別名ファイル `__manual_draft` に出力します。構造キャッシュには補正前の画像認識結果を残すので、人手補正とモデル単独の結果を区別できます。
+通常のバックテストに補正を明示的に組み込む場合は `--corrections-dir manual_corrections` を付けます。承認済み補正は `__manual_approved` の別名ファイルに出力します。下書きは自動的にスキップされ、`--preview-draft-corrections` を追加した場合だけ採点保留の `__manual_draft` に出力します。構造キャッシュには補正前の画像認識結果を残すので、人手補正とモデル単独の結果を区別できます。
 
 ```powershell
-python live_backtest.py --input-dir floor_sample --results-dir backtest_results/manual_preview --image sample1.webp --corrections-dir manual_corrections --preview-draft-corrections
+python live_backtest.py --input-dir floor_sample --results-dir backtest_results/manual_reviewed --image sample1.webp --corrections-dir manual_corrections
 ```
 
 元画像と照合してbbox・開口座標の両方を確認できた場合にのみ、修正JSONの `bbox_review_status`、`opening_position_review_status`、`review_status` を `approved` に変更します。旧形式の `geometry_review_status` も読み取れます。未承認データは `--preview-draft` なしでは適用できず、試算結果を採点へ渡しても採点保留になります。
+
+`sample1` の承認済み補正を既存の構造に適用すると、暫定正解データとの直接接続は8/8件一致します。ただし正解データ自体が `draft` であり、人手補正後の照合値です。採点はまだ保留されます。1階の部屋一覧の再読取が失敗していることと、高画質扱いの図面から窓・設備が0件しか抽出されていないことが理由です。接続補正が成功しただけで、総合点を確定しないでください。

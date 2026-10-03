@@ -8,12 +8,10 @@
   .plan img, .plan svg { position: absolute; inset: 0; width: 632px; height: 461px; }
   .box { fill-opacity: .12; stroke-width: 2; }
   .point { fill: #d50000; stroke: white; stroke-width: 2; }
-  .candidate { fill-opacity: .12; stroke-width: 2; stroke-dasharray: 5 3; }
-  .candidate-point { fill: #6a1b9a; stroke: white; stroke-width: 2; }
   ul { line-height: 1.6; }
 </style>
-<h1>sample1 の位置補正案</h1>
-<p>実線の色枠4か所は利用者確認済みです。赤丸は存在が確認済みの3つの開口について、まだ確認されていない推定位置を示します。破線の紫枠と紫丸は、評価で唯一残った「1階廊下―トイレ」の候補位置で、どちらも未確認です。位置が確定するまで正式な採点には適用しません。</p>
+<h1>sample1 の確認済み位置補正</h1>
+<p>色枠5か所と丸印4点は利用者確認済みです。図面上にない2階主寝室の入口は追加していません。</p>
 <div class="plan">
   <img src="../floor_sample/sample1.webp" width="632" height="461" alt="sample1の間取り図">
   <svg viewBox="0 0 632 461" aria-label="補正範囲と開口位置">
@@ -24,8 +22,8 @@
     <circle class="point" cx="132" cy="281" r="5" />
     <circle class="point" cx="147" cy="251" r="5" />
     <circle class="point" cx="107" cy="306" r="5" />
-    <rect class="candidate" x="132" y="306" width="36" height="53" fill="#6a1b9a" stroke="#6a1b9a" />
-    <circle class="candidate-point" cx="155" cy="306" r="5" />
+    <rect class="box" x="132" y="306" width="36" height="53" fill="#6a1b9a" stroke="#6a1b9a" />
+    <circle class="point" cx="155" cy="306" r="5" />
   </svg>
 </div>
 <ul>
@@ -33,8 +31,8 @@
   <li>青枠：洗面所・脱衣所</li>
   <li>水色枠：浴室</li>
   <li>橙枠：階段</li>
-  <li>赤丸：廊下―洗面所、廊下―階段、洗面所―浴室の開口位置</li>
-  <li>紫の破線枠・丸：トイレの範囲と廊下からの入口位置の新しい候補（未確認・補正JSONにも未追加）</li>
+  <li>紫枠：トイレ</li>
+  <li>赤丸：廊下―洗面所、廊下―階段、洗面所―浴室、廊下―トイレの開口位置</li>
 </ul>
 <p>この補正は<a href="sample1.json">sample1.json</a>に対応します。元図面に描かれていない2階主寝室の入口は追加していません。</p>
 </html>

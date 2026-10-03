@@ -1,14 +1,15 @@
 {
   "image": "sample1.webp",
-  "review_status": "draft",
+  "review_status": "approved",
   "connection_review_status": "approved",
   "bbox_review_status": "approved",
-  "opening_position_review_status": "draft",
-  "notes": "利用者確認: 1階の3接続は直接通行可能、2階主寝室には図面上入口なし。確認ページの色枠4か所は正しい。赤丸3点の開口座標は確認待ちで、正式適用は保留する。",
+  "opening_position_review_status": "approved",
+  "notes": "利用者確認済み: 1階の廊下―洗面所、廊下―階段、洗面所―浴室、廊下―トイレの直接接続と、確認ページの色枠5か所・開口位置4点。2階主寝室には図面上入口なし。これは人手補正であり、モデル単独の認識精度には含めない。",
   "spaces": {
     "R1_HALL": {"bbox": [0.209, 0.236, 0.280, 0.664]},
     "S5": {"bbox": [0.114, 0.666, 0.209, 0.779]},
     "S6": {"bbox": [0.114, 0.490, 0.209, 0.664]},
+    "S7": {"bbox": [0.209, 0.664, 0.266, 0.779]},
     "S12": {"bbox": [0.183, 0.297, 0.233, 0.557]}
   },
   "connections": [
@@ -17,21 +18,28 @@
       "space_b": "S6",
       "boundary_relation": "door",
       "position": [0.209, 0.610],
-      "evidence": "利用者確認済み・位置は暫定"
+      "evidence": "利用者確認済み・位置確認済み"
     },
     {
       "space_a": "R1_HALL",
       "space_b": "S12",
       "boundary_relation": "open_passage",
       "position": [0.233, 0.545],
-      "evidence": "利用者確認済み・位置は暫定"
+      "evidence": "利用者確認済み・位置確認済み"
     },
     {
       "space_a": "S6",
       "space_b": "S5",
       "boundary_relation": "door",
       "position": [0.170, 0.664],
-      "evidence": "利用者確認済み・位置は暫定"
+      "evidence": "利用者確認済み・位置確認済み"
+    },
+    {
+      "space_a": "R1_HALL",
+      "space_b": "S7",
+      "boundary_relation": "door",
+      "position": [0.245, 0.664],
+      "evidence": "利用者確認済み・位置確認済み"
     }
   ],
   "confirmed_no_entrance": ["R2_S2"]
