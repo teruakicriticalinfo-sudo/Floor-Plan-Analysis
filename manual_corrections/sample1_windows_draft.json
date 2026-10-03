@@ -1,0 +1,13 @@
+{
+  "image": "sample1.webp",
+  "review_status": "draft",
+  "source": "assistant_visual_draft",
+  "notes": "元画像の窓らしい線を目視で仮登録したもの。モデルの検出結果でも、利用者承認済みの正解でもない。番号ごとに窓かどうかと位置を確認する。",
+  "windows": [
+    {"id": "W1", "floor_id": "1F", "room": "洋室", "position": [0.361, 0.109], "description": "洋室の上側外壁にある短い横線"},
+    {"id": "W2", "floor_id": "1F", "room": "洋室", "position": [0.453, 0.181], "description": "洋室の右側外壁にある短い縦線"},
+    {"id": "W3", "floor_id": "2F", "room": "LDK", "position": [0.722, 0.195], "description": "LDKの左側外壁にある短い縦線"},
+    {"id": "W4", "floor_id": "2F", "room": "LDK", "position": [0.943, 0.269], "description": "LDKの右側外壁にある短い縦線"},
+    {"id": "W5", "floor_id": "2F", "room": "主寝室", "position": [0.782, 0.732], "description": "主寝室の下側外壁にある短い横線"}
+  ]
+}
