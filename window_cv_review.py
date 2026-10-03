@@ -15,6 +15,7 @@ from pathlib import Path
 from PIL import Image
 
 from floor_plan.window_cv import DETECTOR_VERSION, detect_wall_gap_candidates
+from floor_plan.window_symbols import SYMBOL_DETECTOR_VERSION, detect_window_symbol_candidates
 
 
 ROOT = Path(__file__).resolve().parent
@@ -29,7 +30,8 @@ def _distance_to_box(point: tuple[float, float], box: list[float], size: tuple[i
 
 
 def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
-                                image_size: tuple[int, int], tolerance_px: float = 12) -> dict:
+                                image_size: tuple[int, int], tolerance_px: float = 12,
+                                detector_version: str = DETECTOR_VERSION) -> dict:
     """Measure marked-position coverage only after candidate extraction is done."""
     if annotation.get("classification_review_status") != "user_confirmed":
         raise ValueError("利用者が分類を確認した赤枠だけを照合します")
@@ -77,14 +79,18 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
                              "candidate_id": candidates[candidate_index]["id"],
                              "distance_px": round(distance, 1)})
     development_image = annotation.get("image") == "sample1.webp"
+    symbol_tuning_image = (detector_version == SYMBOL_DETECTOR_VERSION
+                           and annotation.get("image") == "sample2.webp")
     reference_complete = (annotation.get("review_status") == "approved"
                           and annotation.get("coverage_review_status") == "user_confirmed_no_missing_windows")
     note = ("候補は窓と断定していません。sample1は検出器の開発に使った画像で、位置一致は独立評価ではありません。赤枠の網羅性も未確認のためprecisionは計算しません。"
             if development_image else
+            "sample2は平行線候補の条件調整に使った画像です。承認済みの窓矩形への位置一致は独立評価ではありません。候補を窓と断定していないためprecisionは計算しません。"
+            if symbol_tuning_image else
             "利用者がこの画像の全窓位置を確認した矩形に対する候補位置一致です。矩形数は物理的な窓の枚数と同義ではありません。候補を窓と断定していないためprecisionは計算しません。"
             if reference_complete else
             "候補は窓と断定していません。位置一致は利用者が指定した窓枠に限ります。全窓の網羅性は未確認のため、precisionや全窓recallは計算しません。")
-    return {"detector_version": DETECTOR_VERSION,
+    return {"detector_version": detector_version,
             "candidate_count": len(candidates),
             "marked_window_rectangles": len(windows),
             "covered_marked_windows": len(matches),
@@ -103,14 +109,14 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
 
 
 def migrate_review(review: dict, candidates: list[dict], image_name: str,
-                   image_bytes: bytes) -> dict:
+                   image_bytes: bytes, detector_version: str = DETECTOR_VERSION) -> dict:
     """Validate a downloaded review and make legacy generic doors unresolved."""
     version = review.get("schema_version")
     if version not in {1, REVIEW_SCHEMA_VERSION}:
         raise ValueError("確認JSONの形式が不正です")
     if (review.get("image") != image_name
             or review.get("image_sha256") != hashlib.sha256(image_bytes).hexdigest()
-            or review.get("detector_version") != DETECTOR_VERSION):
+            or review.get("detector_version") != detector_version):
         raise ValueError("確認JSONの画像または検出器の版が一致しません")
     source_decisions = review.get("decisions")
     if not isinstance(source_decisions, list) or len(source_decisions) != len(candidates):
@@ -140,7 +146,7 @@ def migrate_review(review: dict, candidates: list[dict], image_name: str,
     normalized.sort(key=lambda item: item["candidate_id"])
     unresolved = {"unreviewed", "door_unclassified"}
     return {"schema_version": REVIEW_SCHEMA_VERSION, "image": image_name,
-            "image_sha256": review["image_sha256"], "detector_version": DETECTOR_VERSION,
+            "image_sha256": review["image_sha256"], "detector_version": detector_version,
             "review_status": ("draft" if any(item["classification"] in unresolved for item in normalized)
                               else "user_reviewed"),
             "source_schema_version": version,
@@ -152,7 +158,8 @@ def migrate_review(review: dict, candidates: list[dict], image_name: str,
 def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[int, int],
                        candidates: list[dict], evaluation: dict,
                        annotation: dict, output: Path,
-                       initial_decisions: dict[str, str] | None = None) -> None:
+                       initial_decisions: dict[str, str] | None = None,
+                       detector_version: str = DETECTOR_VERSION) -> None:
     width, height = image_size
     fingerprint = hashlib.sha256(image_bytes).hexdigest()
     image_mime = mimetypes.guess_type(image_name)[0] or "application/octet-stream"
@@ -168,9 +175,10 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
             f'<rect class="hitbox" x="{x1-6}" y="{y1-6}" width="{x2-x1+12}" height="{y2-y1+12}"/>'
             f'<text x="{x1+3}" y="{max(9,y1-4)}">{ident[1:]}</text></g>')
         direction = "縦" if candidate["orientation"] == "vertical" else "横"
+        source = "平行線" if candidate.get("source") == "parallel_strokes" else "壁の切れ目"
         rows.append(
             f'<label class="review-row" id="row-{ident}" data-id="{ident}">'
-            f'<span><strong>{ident}</strong> {direction} {x1},{y1}–{x2},{y2}</span>'
+            f'<span><strong>{ident}</strong> {direction}・{source} {x1},{y1}–{x2},{y2}</span>'
             f'<select aria-label="{ident} の判定" data-id="{ident}">'
             '<option value="unreviewed">未判定</option>'
             '<option value="window">窓</option>'
@@ -189,7 +197,7 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
             f'<rect x="{x1:.1f}" y="{y1:.1f}" width="{x2-x1:.1f}" height="{y2-y1:.1f}" '
             f'fill="none" stroke="{color}" stroke-width="1.5"/>')
     data = {"image": image_name, "image_sha256": fingerprint,
-            "detector_version": DETECTOR_VERSION,
+            "detector_version": detector_version,
             "initial_decisions": initial_decisions or {},
             "candidates": [{"id": candidate["id"], "bbox": candidate["bbox"],
                             "orientation": candidate["orientation"]} for candidate in candidates],
@@ -198,14 +206,20 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
     coverage_text = (f"{evaluation['covered_marked_windows']}/{evaluation['marked_window_rectangles']}"
                      if evaluation["marked_window_rectangles"] is not None else "赤枠照合なし")
     development_image = image_name == "sample1.webp"
+    symbol_tuning_image = detector_version == SYMBOL_DETECTOR_VERSION and image_name == "sample2.webp"
     reference_complete = (annotation.get("review_status") == "approved"
                           and annotation.get("coverage_review_status") == "user_confirmed_no_missing_windows")
     coverage_label = "開発用赤枠の位置一致" if development_image else "指定された窓枠への位置一致"
     coverage_note = ("位置一致はsample1での開発中の値です。窓の自動認定や独立した精度評価ではありません。"
                      if development_image else
+                     "位置一致はsample2で平行線条件を調整した後の値です。独立した精度評価ではありません。"
+                     if symbol_tuning_image else
                      "利用者が全窓位置を確認した矩形への候補位置一致です。窓としての正答率や採点結果ではありません。"
                      if reference_complete else
                      "位置一致は指定された窓枠だけの値です。窓の自動認定や全窓の精度評価ではありません。")
+    detector_note = ("青は壁線の切れ目と平行線から拾った開口候補です。"
+                     if detector_version == SYMBOL_DETECTOR_VERSION else
+                     "青は画像処理が見つけた「壁線の切れ目」です。")
     page = f"""<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>窓候補の確認 — {html.escape(image_name)}</title>
@@ -236,7 +250,7 @@ select,button{{font:inherit;padding:4px 6px}}button{{cursor:pointer}}
 @media(max-width:900px){{main{{grid-template-columns:1fr}}.review-list{{max-height:none}}}}
 </style>
 <header><h1>窓候補の確認 — {html.escape(image_name)}</h1>
-<p>青は画像処理が見つけた「壁線の切れ目」です。窓とは限りません。候補をクリックし、室内扉と外部扉も分けて分類してください。</p>
+<p>{detector_note}窓とは限りません。候補をクリックし、室内扉と外部扉も分けて分類してください。</p>
 <p class="small">このページは採点を変更しません。判定はブラウザ内に一時保存され、「確認結果JSONを保存」で書き出せます。</p></header>
 <main><section class="panel"><div class="controls">
 <label><input id="show-reference" type="checkbox"> 元の赤枠を表示（赤＝窓、紫＝外部扉）</label>
@@ -340,6 +354,9 @@ def main() -> int:
                         help="照合する赤枠JSON。sample1.webpでは省略時に既存の赤枠を使用")
     parser.add_argument("--review-file", type=Path,
                         help="以前に保存した確認JSON。旧形式の扉は内外未分類に変換して再確認ページへ反映")
+    parser.add_argument("--detector", choices=(DETECTOR_VERSION, SYMBOL_DETECTOR_VERSION),
+                        default=DETECTOR_VERSION,
+                        help="候補検出器。wall-symbol-v2は平行線も拾う実験版")
     parser.add_argument("--output-dir", type=Path, default=Path("targeted_vision_results"))
     args = parser.parse_args()
     image_path = (ROOT / args.image).resolve()
@@ -350,15 +367,17 @@ def main() -> int:
         parser.error(f"画像がありません: {image_path}")
     image_bytes = image_path.read_bytes()
     with Image.open(image_path) as opened:
-        candidates = detect_wall_gap_candidates(opened)
+        candidates = (detect_window_symbol_candidates(opened)
+                      if args.detector == SYMBOL_DETECTOR_VERSION else
+                      detect_wall_gap_candidates(opened))
         image_size = opened.size
     output_dir = (ROOT / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"{image_path.stem}.{DETECTOR_VERSION}"
+    stem = f"{image_path.stem}.{args.detector}"
     candidates_path = output_dir / f"{stem}.candidates.json"
     candidates_path.write_text(json.dumps({"image": image_path.name,
                                            "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
-                                           "detector_version": DETECTOR_VERSION,
+                                           "detector_version": args.detector,
                                            "candidates": candidates}, ensure_ascii=False, indent=2), encoding="utf-8")
     if annotation_path:
         if not annotation_path.is_file():
@@ -366,10 +385,11 @@ def main() -> int:
         annotation = json.loads(annotation_path.read_text(encoding="utf-8"))
         if annotation.get("image") != image_path.name:
             parser.error("赤枠の画像名が入力画像と一致しません")
-        evaluation = evaluate_candidate_coverage(candidates, annotation, image_size)
+        evaluation = evaluate_candidate_coverage(candidates, annotation, image_size,
+                                                 detector_version=args.detector)
     else:
         annotation = {"reference_rectangles": []}
-        evaluation = {"detector_version": DETECTOR_VERSION, "candidate_count": len(candidates),
+        evaluation = {"detector_version": args.detector, "candidate_count": len(candidates),
                       "marked_window_rectangles": None, "covered_marked_windows": None,
                       "marked_window_coverage": None, "precision": None,
                       "note": "赤枠がないため候補位置の精度は未測定です。候補は窓と断定していません。"}
@@ -381,7 +401,8 @@ def main() -> int:
         if not source_path.is_file():
             parser.error(f"確認JSONがありません: {source_path}")
         source_review = json.loads(source_path.read_text(encoding="utf-8"))
-        migrated = migrate_review(source_review, candidates, image_path.name, image_bytes)
+        migrated = migrate_review(source_review, candidates, image_path.name, image_bytes,
+                                  detector_version=args.detector)
         draft_path = output_dir / f"{stem}.review_draft.json"
         draft_path.write_text(json.dumps(migrated, ensure_ascii=False, indent=2), encoding="utf-8")
         initial_decisions = {item["candidate_id"]: item["classification"]
@@ -391,7 +412,8 @@ def main() -> int:
         print(f"再確認用の下書きJSON: {draft_path}")
     review_path = output_dir / f"{stem}.{'recheck' if args.review_file else 'review'}.html"
     render_review_page(image_bytes, image_path.name, image_size,
-                       candidates, evaluation, annotation, review_path, initial_decisions)
+                       candidates, evaluation, annotation, review_path, initial_decisions,
+                       detector_version=args.detector)
     if evaluation["marked_window_rectangles"] is None:
         print(f"候補 {len(candidates)}件、赤枠照合なし")
     else:

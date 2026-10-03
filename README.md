@@ -132,7 +132,15 @@ python window_cv_review.py --review-file "C:\Users\teru\Downloads\sample1_window
 
 再確認済みの分類は `manual_corrections/sample1_window_cv_review.json` に保存しています。42候補の内訳は窓21件、室内扉7件、外部扉4件、非開口10件で、未分類はありません。画像ハッシュ・候補ID・位置の照合を通した人手ラベルですが、採点やモデルの推論結果には自動反映しません。既知の赤枠20窓との一致は検出器の開発に使った同じ画像での確認値であり、独立した精度評価ではありません。
 
-別画像のsample2では、利用者が赤枠10件すべてを窓と確認し、元画像への重ね合わせ位置と窓の付け漏れがないことも確認しました。承認済みの矩形は `manual_corrections/sample2_windows.json`、重ね合わせ画像は `targeted_vision_results/sample2.user_redboxes.registration.png` です。現行検出器の候補は1件で、承認済みの窓矩形への位置一致は0/10件でした。これはsample1を使って調整した検出器の別画像での結果です。矩形数は物理的な窓の枚数と同義ではなく、候補を窓と判定する機能もないためprecisionは出しません。この描画スタイルに現行検出器を適用して採点しないでください。
+別画像のsample2では、利用者が赤枠10件すべてを窓と確認し、元画像への重ね合わせ位置と窓の付け漏れがないことも確認しました。承認済みの矩形は `manual_corrections/sample2_windows.json`、重ね合わせ画像は `targeted_vision_results/sample2.user_redboxes.registration.png` です。旧版 `wall-gap-v1` の候補は1件で、承認済みの窓矩形への位置一致は0/10件でした。これはsample1を使って調整した検出器の別画像での結果です。矩形数は物理的な窓の枚数と同義ではなく、候補を窓と判定する機能もないためprecisionは出しません。この描画スタイルに旧版を適用して採点しないでください。
+
+平行線の窓記号を拾う実験版 `wall-symbol-v2` も選べます。旧版 `wall-gap-v1` の結果と確認JSONは上書きしません。sample2で平行線条件を調整したため、同画像での16候補・窓矩形9/10件の位置一致は**開発中の確認値**で、独立テストの精度ではありません。残るR08は未検出で、窓矩形と一致しない候補も7件あります。sample1では44候補・既知の窓矩形20/20件でしたが、こちらも開発に使った画像です。候補は窓と確定しておらず、採点には反映しません。次は別画像で候補の分類・見落としを確認してください。
+
+```powershell
+python window_cv_review.py --image floor_sample/sample2.webp --annotations manual_corrections/sample2_windows.json --detector wall-symbol-v2
+```
+
+出力先は `targeted_vision_results/sample2.wall-symbol-v2.review.html` です。表示される候補は窓・扉・非開口に人手で分類してJSONを書き出せます。以前の `wall-gap-v1` 確認JSONは候補IDが異なるため、新版へ直接読み込みません。
 
 赤枠がまだない別画像でも候補と確認ページを作れます。この場合は位置一致を未測定と表示します。
 

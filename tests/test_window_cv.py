@@ -7,6 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from floor_plan.window_cv import detect_wall_gap_candidates
+from floor_plan.window_symbols import SYMBOL_DETECTOR_VERSION
 from window_cv_review import evaluate_candidate_coverage, migrate_review, render_review_page
 
 
@@ -72,6 +73,9 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertEqual(report["marked_window_coverage"], 0)
         self.assertIn("全窓位置を確認", report["note"])
         self.assertIsNone(report["precision"])
+        tuned_report = evaluate_candidate_coverage([], annotation, (100, 100),
+                                                   detector_version=SYMBOL_DETECTOR_VERSION)
+        self.assertIn("独立評価ではありません", tuned_report["note"])
         annotation["review_status"] = "draft"
         draft_report = evaluate_candidate_coverage([], annotation, (100, 100))
         self.assertFalse(draft_report["window_reference_complete"])
@@ -95,6 +99,10 @@ class WallGapDetectionTests(unittest.TestCase):
         review["decisions"][1]["bbox"] = [0, 0, 1, 1]
         with self.assertRaises(ValueError):
             migrate_review(review, candidates, "sample.webp", image_bytes)
+        review["decisions"][1]["bbox"] = candidates[1]["bbox"]
+        with self.assertRaises(ValueError):
+            migrate_review(review, candidates, "sample.webp", image_bytes,
+                           detector_version=SYMBOL_DETECTOR_VERSION)
 
     def test_review_page_exports_decisions_and_hides_reference_by_default(self):
         image = Image.new("RGB", (30, 30), "white")
@@ -123,6 +131,25 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertIn("data.schema_version===1", page)
         self.assertIn("指定された窓枠への位置一致", page)
         self.assertNotIn("sample1での開発中", page)
+
+    def test_symbol_review_page_has_distinct_detector_version(self):
+        image = Image.new("RGB", (30, 30), "white")
+        buffer = io.BytesIO()
+        image.save(buffer, format="WEBP")
+        candidates = [{"id": "C001", "orientation": "vertical",
+                       "pixel_bbox": [10, 10, 15, 20],
+                       "bbox": [10 / 30, 10 / 30, 15 / 30, 20 / 30],
+                       "source": "parallel_strokes"}]
+        evaluation = {"covered_marked_windows": 0, "marked_window_rectangles": 0}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "review.html"
+            render_review_page(buffer.getvalue(), "sample2.webp", image.size,
+                               candidates, evaluation, {"reference_rectangles": []}, path,
+                               detector_version=SYMBOL_DETECTOR_VERSION)
+            page = path.read_text(encoding="utf-8")
+        self.assertIn(SYMBOL_DETECTOR_VERSION, page)
+        self.assertIn("平行線", page)
+        self.assertIn("独立した精度評価ではありません", page)
 
 
 if __name__ == "__main__":
