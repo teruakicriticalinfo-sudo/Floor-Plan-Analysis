@@ -96,5 +96,7 @@ def apply_reviewed_corrections(
                 [*connection.get("validation_reasons", []), "図面に入口がないことを利用者が確認"]
             ))
     result["manual_correction_status"] = status
+    if status == "approved":
+        result["manual_confirmed_bbox_ids"] = sorted(corrections.get("spaces", {}))
     result.pop("verified_topology", None)
     return add_verified_topology(result)

@@ -17,6 +17,7 @@ from .analyzer import (
     render_analysis_report,
     validate_connections,
     validate_scoring_json,
+    sanitize_visual_features,
 )
 from .providers import (
     DEFAULT_OLLAMA_HOST,
@@ -45,6 +46,7 @@ __all__ = [
     "render_analysis_report",
     "validate_connections",
     "validate_scoring_json",
+    "sanitize_visual_features",
     "DEFAULT_OLLAMA_HOST",
     "DEFAULT_OLLAMA_MODEL",
     "FallbackClient",

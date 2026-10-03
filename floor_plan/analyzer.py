@@ -30,7 +30,7 @@ STRUCTURE_JSON_SCHEMA = {
         "image_quality": {"type": "object"},
         "orientation": {"type": "object"},
         "plan_regions": {"type": "array", "items": {"type": "object", "required": ["floor_id", "bbox"], "properties": {"floor_id": {"type": "string"}, "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}}}}},
-        "spaces": {"type": "array", "items": {"type": "object", "required": ["id", "label", "space_type", "bbox", "confidence"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "space_type": {"type": "string"}, "floor_id": {"type": ["string", "null"]}, "area_text": {"type": ["string", "null"]}, "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
+        "spaces": {"type": "array", "items": {"type": "object", "required": ["id", "label", "space_type", "bbox", "confidence"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "space_type": {"type": "string", "enum": ["room", "hall", "sanitary", "storage", "exterior", "vertical_circulation", "other"]}, "floor_id": {"type": ["string", "null"]}, "area_text": {"type": ["string", "null"]}, "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "openings": {"type": "array", "items": {"type": "object", "required": ["id", "opening_type", "position", "confidence"], "properties": {"id": {"type": "string"}, "opening_type": {"type": "string"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "connections": {"type": "array", "items": {"type": "object", "required": ["id", "opening_id", "space_a", "space_b", "boundary_relation", "traversable", "position", "confidence"], "properties": {"id": {"type": "string"}, "opening_id": {"type": "string"}, "space_a": {"type": "string"}, "space_b": {"type": "string"}, "boundary_relation": {"type": "string"}, "traversable": {"type": "boolean"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
         "windows": {"type": "array", "items": {"type": "object", "required": ["id", "space_id", "position", "confidence"], "properties": {"id": {"type": "string"}, "space_id": {"type": "string"}, "faces_exterior": {"type": "boolean"}, "position": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "confidence": {"type": "string"}, "evidence": {"type": "string"}}}},
@@ -53,7 +53,16 @@ SPACE_INVENTORY_SCHEMA = {
 
 CROPPED_INVENTORY_SCHEMA = {
     "type": "object", "required": ["spaces"],
-    "properties": {"spaces": STRUCTURE_JSON_SCHEMA["properties"]["spaces"]},
+    "properties": {"spaces": deepcopy(STRUCTURE_JSON_SCHEMA["properties"]["spaces"])},
+}
+CROPPED_INVENTORY_SCHEMA["properties"]["spaces"]["items"]["properties"]["id"] = {
+    "type": "string", "minLength": 1,
+}
+CROPPED_INVENTORY_SCHEMA["properties"]["spaces"]["items"]["properties"]["label"] = {
+    "type": "string", "minLength": 1,
+}
+CROPPED_INVENTORY_SCHEMA["properties"]["spaces"]["items"]["properties"]["confidence"] = {
+    "type": "string", "enum": ["high", "medium", "low"],
 }
 
 HALL_PROBE_SCHEMA = {
@@ -82,6 +91,16 @@ FEATURE_SCHEMA = {
         "fixtures": STRUCTURE_JSON_SCHEMA["properties"]["fixtures"],
         "unreadable_items": STRUCTURE_JSON_SCHEMA["properties"]["unreadable_items"],
     },
+}
+
+FIXTURE_SCHEMA = {
+    "type": "object", "required": ["fixtures"],
+    "properties": {"fixtures": STRUCTURE_JSON_SCHEMA["properties"]["fixtures"]},
+}
+
+WINDOW_SCHEMA = {
+    "type": "object", "required": ["windows"],
+    "properties": {"windows": STRUCTURE_JSON_SCHEMA["properties"]["windows"]},
 }
 
 SCORE_JSON_SCHEMA = {
@@ -223,7 +242,7 @@ def build_space_inventory_prompt() -> str:
 - 読めない空間を推測で作らない。bboxは文字だけでなく壁で囲まれた領域全体を示す。
 
 JSON形式:
-{"image_quality":{"level":"high|medium|low","notes":[]},"orientation":{"value":null,"confidence":"high|medium|low","evidence":"..."},"plan_regions":[{"floor_id":"1F","bbox":[0,0,0.5,1]},{"floor_id":"2F","bbox":[0.5,0,1,1]}],"spaces":[{"id":"S1","label":"LDK","space_type":"room|hall|storage|sanitary|exterior|vertical_circulation|other","floor_id":"1F|null","area_text":"14.5帖|null","bbox":[0,0,1,1],"confidence":"high|medium|low","evidence":"..."}]}
+image_quality、orientation、plan_regions、spacesを持つJSONオブジェクトだけ返す。space_typeはroom、hall、sanitary、storage、exterior、vertical_circulation、otherから1語だけ選ぶ。選択肢を連結して書かない。
 JSON以外は返さない。
 """.strip()
 
@@ -236,6 +255,7 @@ def build_cropped_inventory_prompt(floor_id: str) -> str:
 各bboxはこの切出し画像の左上[0,0]、右下[1,1]に正規化します。文字の位置ではなく、壁に囲まれた空間の外形です。
 読めない空間は推測せず省略します。扉や接続、評価はまだ扱いません。
 返答はspaces配列を持つJSONオブジェクトだけにしてください。各要素はid、label、space_type、bbox、confidence、evidenceを持ちます。
+idはS1、S2のように全件一意に付け、confidenceはhigh、medium、lowのいずれかを必ず書いてください。空文字は禁止です。
 space_typeはroom、hall、sanitary、storage、exterior、vertical_circulation、otherのいずれか1語だけにします。候補を縦線で連結しないでください。
 図面全体を1部屋のbboxとして返さず、壁で区切られた部屋を個別に列挙してください。
 """.strip()
@@ -264,21 +284,48 @@ def _valid_hall_probe(value: Any) -> bool:
     return x1 < x2 and y1 < y2 and (x2 - x1) * (y2 - y1) < 0.5 and bool(str(value.get("evidence") or "").strip())
 
 
-def _valid_cropped_inventory(value: Any, expected_count: int) -> bool:
+def _inventory_anchor(space: dict[str, Any]) -> str | None:
+    label = str(space.get("label") or "").upper()
+    for anchor, markers in (
+        ("entrance", ("玄関",)),
+        ("bath", ("浴室", "風呂", "バス")),
+        ("washroom", ("洗面", "脱衣")),
+        ("toilet", ("トイレ", "便所", "WC")),
+        ("stairs", ("階段",)),
+        ("living", ("LDK", "リビング")),
+    ):
+        if any(marker in label for marker in markers):
+            return anchor
+    return None
+
+
+def _valid_cropped_inventory(
+    value: Any, expected_count: int, expected_spaces: list[dict[str, Any]] | None = None,
+) -> bool:
     spaces = value.get("spaces") if isinstance(value, dict) else None
     if not isinstance(spaces, list) or not spaces:
         return False
-    if expected_count >= 3 and len(spaces) < 2:
+    if expected_count >= 3 and len(spaces) < max(2, round(expected_count * 0.7)):
         return False
     allowed_types = {"room", "hall", "sanitary", "storage", "exterior", "vertical_circulation", "other"}
     ids = [item.get("id") for item in spaces if isinstance(item, dict)]
-    return (
+    structurally_valid = (
         len(ids) == len(spaces) and len(ids) == len(set(ids))
-        and all(item.get("id") and item.get("space_type") in allowed_types
+        and all(item.get("id") and str(item.get("label") or "").strip()
+                and item.get("space_type") in allowed_types
+                and item.get("confidence", "low") in {"high", "medium", "low"}
                 and _valid_normalized_coordinates(item.get("bbox"), 4)
                 and item["bbox"][0] < item["bbox"][2] and item["bbox"][1] < item["bbox"][3]
                 for item in spaces)
     )
+    if not structurally_valid:
+        return False
+    if expected_spaces:
+        required = {_inventory_anchor(space) for space in expected_spaces} - {None}
+        observed = {_inventory_anchor(space) for space in spaces} - {None}
+        if not required.issubset(observed):
+            return False
+    return True
 
 
 def build_topology_prompt(inventory: dict[str, Any]) -> str:
@@ -322,7 +369,35 @@ def build_feature_prompt(inventory: dict[str, Any]) -> str:
 各窓はid, space_id, faces_exterior, position, confidence, evidenceを持ち、各設備はspace_id, fixture, confidence, evidenceを持ちます。
 座標はこの画像の左上[0,0]、右下[1,1]です。IDは以下の空間一覧だけを使用してください。
 【空間一覧】{json.dumps(inventory['spaces'], ensure_ascii=False, separators=(',', ':'))}
-{{"windows":[],"fixtures":[],"unreadable_items":[]}} の形式のJSONだけ返してください。
+windows、fixtures、unreadable_itemsの3配列を持つJSONだけ返してください。空配列は、各箇所を確認しても見つからなかった場合だけにします。
+""".strip()
+
+
+def _feature_space_legend(inventory: dict[str, Any]) -> str:
+    return json.dumps(
+        [{"id": space["id"], "label": space.get("label"), "space_type": space.get("space_type")}
+         for space in inventory["spaces"]],
+        ensure_ascii=False, separators=(",", ":"),
+    )
+
+
+def build_fixture_recheck_prompt(inventory: dict[str, Any]) -> str:
+    return f"""
+この間取り図の設備だけを確認してください。窓・扉・接続・採点は不要です。
+浴槽、トイレ便器、洗面台、キッチンのシンクとコンロの図形を順に見て、描かれたものだけを登録します。
+各設備はspace_id、fixture、confidence（high/medium/low）、evidenceを持ちます。space_idは次の一覧のIDだけです。
+【空間IDと名称】{_feature_space_legend(inventory)}
+図形が明確に見えない設備を推測で補わないでください。fixtures配列を持つJSONだけ返してください。
+""".strip()
+
+
+def build_window_recheck_prompt(inventory: dict[str, Any]) -> str:
+    return f"""
+この間取り図の窓だけを確認してください。設備・扉・接続・採点は不要です。
+外壁上の窓記号を部屋ごとに確認し、画像で実際に見えるものだけを登録します。室内建具は窓として数えません。
+各窓は一意のid、space_id、position（画像左上[0,0]、右下[1,1]）、faces_exterior、confidence（high/medium/low）、evidenceを持ちます。
+space_idは次の一覧のIDだけです。【空間IDと名称】{_feature_space_legend(inventory)}
+見えない窓を推測で補わないでください。windows配列を持つJSONだけ返してください。
 """.strip()
 
 
@@ -613,7 +688,8 @@ def deduplicate_topology_observations(topology: dict[str, Any]) -> dict[str, Any
 def discard_invalid_observations(inventory: dict[str, Any], topology: dict[str, Any]) -> dict[str, Any]:
     """Keep a bad model reference from aborting the whole image analysis."""
     result = deepcopy(topology)
-    known_spaces = {space["id"] for space in inventory["spaces"]}
+    spaces_by_id = {space["id"]: space for space in inventory["spaces"]}
+    known_spaces = set(spaces_by_id)
     unreadable = result.get("unreadable_items")
     if not isinstance(unreadable, list):
         unreadable = []
@@ -645,12 +721,53 @@ def discard_invalid_observations(inventory: dict[str, Any], topology: dict[str, 
                     or key == "windows" and (not item.get("id") or not _valid_normalized_coordinates(item.get("position"), 2))):
                 unreadable.append(f"{key}: 未定義の部屋IDを除外")
                 continue
+            if item.get("confidence") not in {"high", "medium"}:
+                unreadable.append(f"{key}: 低確信度の観察を除外")
+                continue
+            if key == "windows" and _point_to_bbox_edge_distance(
+                item["position"], spaces_by_id[item["space_id"]].get("bbox"),
+            ) > 0.035:
+                unreadable.append(f"{item['id']}: 窓座標が部屋の外周から離れているため除外")
+                continue
+            if key == "fixtures" and not _fixture_matches_space(item, spaces_by_id[item["space_id"]]):
+                unreadable.append(f"{item['space_id']}: 設備の種類と部屋が矛盾するため除外")
+                continue
             valid_items.append(item)
         result[key] = valid_items
     result["negative_observations"] = [
         item for item in result.get("negative_observations") or []
         if isinstance(item, dict) and item.get("space_id") in known_spaces
     ]
+    return result
+
+
+def _fixture_matches_space(fixture: dict[str, Any], space: dict[str, Any]) -> bool:
+    name = str(fixture.get("fixture") or "")
+    anchor = _inventory_anchor(space)
+    label = str(space.get("label") or "")
+    if any(word in name for word in ("浴槽", "バスタブ")):
+        return anchor == "bath"
+    if any(word in name for word in ("トイレ", "便器")):
+        return anchor in {"toilet", "bath"}
+    if any(word in name for word in ("洗面台", "洗面化粧台")):
+        return anchor in {"washroom", "bath"}
+    if any(word in name for word in ("キッチン", "シンク", "コンロ")):
+        return anchor == "living" or any(word in label for word in ("台所", "キッチン", "ダイニング"))
+    return True
+
+
+def sanitize_visual_features(structure: dict[str, Any]) -> dict[str, Any]:
+    """Revalidate cached feature observations against current geometry and room labels."""
+    result = deepcopy(structure)
+    observations = discard_invalid_observations(result, {
+        "windows": result.get("windows", []), "fixtures": result.get("fixtures", []),
+        "unreadable_items": [],
+    })
+    result["windows"] = observations["windows"]
+    result["fixtures"] = observations["fixtures"]
+    result["unreadable_items"] = list(dict.fromkeys([
+        *result.get("unreadable_items", []), *observations["unreadable_items"],
+    ]))
     return result
 
 
@@ -947,11 +1064,53 @@ def _parse_or_repair_structure(
             ) from repair_error
 
 
+def _recheck_empty_features(
+    local_inventory: dict[str, Any], image: Any, client: Any, model: str,
+    missing: set[str] | None = None,
+) -> dict[str, Any]:
+    """Ask focused visual questions only for feature types that are still missing."""
+    observations: dict[str, Any] = {"windows": [], "fixtures": [], "unreadable_items": []}
+    missing = missing or {"windows", "fixtures"}
+    probe_image = image
+    if hasattr(image, "size") and hasattr(image, "resize") and max(image.size) > 0:
+        try:
+            from PIL import Image as PilImage
+
+            scale = min(3.0, 1400 / max(image.size))
+            if scale > 1:
+                probe_image = image.resize(
+                    (round(image.size[0] * scale), round(image.size[1] * scale)),
+                    PilImage.Resampling.LANCZOS,
+                )
+        except (ImportError, AttributeError):
+            pass
+    for key, prompt, schema in (
+        ("fixtures", build_fixture_recheck_prompt(local_inventory), FIXTURE_SCHEMA),
+        ("windows", build_window_recheck_prompt(local_inventory), WINDOW_SCHEMA),
+    ):
+        if key not in missing:
+            continue
+        response = _generate_with_retry(
+            client, model=model,
+            contents=[prompt, probe_image],
+            config={"response_mime_type": "application/json", "response_json_schema": schema,
+                    "temperature": 0, "max_output_tokens": 768},
+        )
+        parsed = _parse_or_repair_json_object(
+            _response_text(response, f"{key}再確認"), client, model, f"{key}再確認", schema,
+        )
+        if not isinstance(parsed.get(key), list):
+            raise RuntimeError(f"{key}再確認の配列がありません。")
+        observations[key] = parsed[key]
+    return discard_invalid_observations(local_inventory, observations)
+
+
 def extract_floor_plan_structure(
     image: Any, client: Any, model: str = DEFAULT_MODEL,
     progress: Callable[[str], None] | None = None,
     checkpoint_path: Path | None = None,
     resume_checkpoint: bool = True,
+    retry_incomplete_stages: bool = False,
 ) -> dict[str, Any]:
     """Stage 1: inventory spaces, then detect openings and associate topology."""
     stage_data: dict[str, Any] = {}
@@ -996,12 +1155,15 @@ def extract_floor_plan_structure(
             cropped = _crop_floor_region(image, region)
             stage = f"region_inventory_{index}"
             local = deepcopy(stage_data.get(stage))
-            expected_count = sum(space.get("floor_id") == region["floor_id"] for space in inventory["spaces"])
-            fallback = bool(stage_data.get(f"fallback_{index}"))
-            if local is not None and not _valid_cropped_inventory(local, expected_count):
+            expected_spaces = [space for space in inventory["spaces"] if space.get("floor_id") == region["floor_id"]]
+            expected_count = len(expected_spaces)
+            previous_fallback = bool(stage_data.get(f"fallback_{index}"))
+            fallback = previous_fallback and not retry_incomplete_stages
+            if local is not None and not _valid_cropped_inventory(local, expected_count, expected_spaces):
                 stage_data.pop(stage, None)
-                stage_data.pop(f"topology_{index}", None)
-                stage_data.pop(f"features_{index}", None)
+                if not previous_fallback:
+                    stage_data.pop(f"topology_{index}", None)
+                    stage_data.pop(f"features_{index}", None)
                 local = None
                 fallback = True
             if local is None and not fallback:
@@ -1014,11 +1176,16 @@ def extract_floor_plan_structure(
                     _response_text(response, "階別空間一覧"), client, model,
                     "階別空間一覧", CROPPED_INVENTORY_SCHEMA,
                 )
-                if not _valid_cropped_inventory(local, expected_count):
+                if not _valid_cropped_inventory(local, expected_count, expected_spaces):
                     fallback = True
-                    stage_data.pop(f"topology_{index}", None)
-                    stage_data.pop(f"features_{index}", None)
+                    if not previous_fallback:
+                        stage_data.pop(f"topology_{index}", None)
+                        stage_data.pop(f"features_{index}", None)
                 else:
+                    if previous_fallback:
+                        stage_data.pop(f"fallback_{index}", None)
+                        stage_data.pop(f"topology_{index}", None)
+                        stage_data.pop(f"features_{index}", None)
                     remember(stage, local)
             if fallback:
                 floor_repair_attempts.append(region["floor_id"])
@@ -1123,6 +1290,7 @@ def extract_floor_plan_structure(
                 progress(f"3/4 窓・設備を確認中（領域 {index or 1}/{len(stages)}）")
             stage = f"features_{index}"
             features = deepcopy(stage_data.get(stage))
+            fresh = features is None
             if features is None:
                 feature_response = _generate_with_retry(
                     client, model=model,
@@ -1133,6 +1301,21 @@ def extract_floor_plan_structure(
                     _response_text(feature_response, "窓・設備結果"), client, model,
                     "窓・設備結果", FEATURE_SCHEMA,
                 )
+            cleaned = discard_invalid_observations(local_inventory, deepcopy(features))
+            should_recheck = retry_incomplete_stages or (
+                fresh and inventory.get("image_quality", {}).get("level") == "high"
+                and len(local_inventory["spaces"]) >= 3
+            )
+            missing = {key for key in ("windows", "fixtures") if not cleaned[key]}
+            if should_recheck and missing:
+                if progress:
+                    progress(f"3/4 窓・設備の不足分を個別に再確認中（領域 {index or 1}/{len(stages)}）")
+                recovered = _recheck_empty_features(local_inventory, local_image, client, model, missing)
+                for key in missing:
+                    cleaned[key] = recovered[key]
+                cleaned["unreadable_items"].extend(recovered["unreadable_items"])
+                features = cleaned
+            if fresh or should_recheck and missing:
                 remember(stage, features)
             features = discard_invalid_observations(local_inventory, features)
             if region:
@@ -1364,10 +1547,22 @@ def analyze_from_structure(
         hold_reasons.append("位置修正が未承認の下書きのため採点を保留")
     if structure.get("floor_reading_fallbacks"):
         if structure.get("floor_hall_recoveries"):
-            hold_reasons.append(
-                f"{', '.join(structure['floor_reading_fallbacks'])}の階別部屋再読取が失敗。"
-                "廊下候補のみ追加したが、位置は概略で他の部屋は初回の一覧を使用"
-            )
+            recovered_halls = {
+                space["id"] for space in structure.get("spaces", [])
+                if space.get("id", "").endswith("_HALL")
+                and space.get("floor_id") in structure["floor_hall_recoveries"]
+            }
+            confirmed_halls = set(structure.get("manual_confirmed_bbox_ids", []))
+            if recovered_halls and recovered_halls.issubset(confirmed_halls):
+                hold_reasons.append(
+                    f"{', '.join(structure['floor_reading_fallbacks'])}の階別部屋再読取が失敗。"
+                    "廊下の位置は人手確認済みだが、他の部屋は初回の一覧を使用"
+                )
+            else:
+                hold_reasons.append(
+                    f"{', '.join(structure['floor_reading_fallbacks'])}の階別部屋再読取が失敗。"
+                    "廊下候補のみ追加したが、位置は概略で他の部屋は初回の一覧を使用"
+                )
         else:
             hold_reasons.append(f"{', '.join(structure['floor_reading_fallbacks'])}の階別部屋再読取が失敗し、初回の部屋一覧を使用")
     if (structure.get("image_quality", {}).get("level") == "high"
@@ -1633,12 +1828,15 @@ def analyze_floor_plan(
     progress: Callable[[str], None] | None = None,
     checkpoint_path: Path | None = None,
     resume_checkpoint: bool = True,
+    retry_incomplete_stages: bool = False,
 ) -> FloorPlanAnalysis:
     """Run topology extraction first, then evaluate the extracted JSON."""
-    draft = extract_floor_plan_structure(image, client, model, progress, checkpoint_path, resume_checkpoint)
+    draft = extract_floor_plan_structure(
+        image, client, model, progress, checkpoint_path, resume_checkpoint, retry_incomplete_stages,
+    )
     if progress:
         progress("接続を再照合中")
-    structure = verify_floor_plan_structure(image, draft, client, model)
+    structure = sanitize_visual_features(verify_floor_plan_structure(image, draft, client, model))
     if progress:
         progress("採点中")
     scoring = analyze_from_structure(structure, client, knowledge, model)
@@ -1655,7 +1853,7 @@ def analyze_cached_structure(
 ) -> FloorPlanAnalysis:
     """Reuse cached vision results and execute only the scoring stage."""
     parse_structure_response(json.dumps(draft, ensure_ascii=False))
-    structure = add_verified_topology(structure)
+    structure = add_verified_topology(sanitize_visual_features(structure))
     scoring = analyze_from_structure(structure, client, knowledge, model)
     report = render_analysis_report(scoring, structure)
     return FloorPlanAnalysis(draft_structure=draft, structure=structure, scoring=scoring, report=report)

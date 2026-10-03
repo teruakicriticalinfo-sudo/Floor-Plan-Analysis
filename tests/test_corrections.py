@@ -80,6 +80,24 @@ class CorrectionTests(unittest.TestCase):
             {(item["space_a"], item["space_b"], tuple(item["position"])) for item in corrections["connections"]},
         )
 
+    def test_approved_hall_geometry_does_not_claim_floor_inventory_is_complete(self):
+        structure = json.loads(json.dumps(self.structure))
+        structure["spaces"][0]["id"] = "R1_HALL"
+        for connection in structure["connections"]:
+            if connection["space_a"] == "hall":
+                connection["space_a"] = "R1_HALL"
+        structure["floor_reading_fallbacks"] = ["1F"]
+        structure["floor_hall_recoveries"] = ["1F"]
+        corrections = {
+            "review_status": "approved", "spaces": {"R1_HALL": {"bbox": [0.2, 0.1, 0.4, 0.8]}},
+            "connections": [], "confirmed_no_entrance": [],
+        }
+        corrected = apply_reviewed_corrections(structure, corrections)
+        scoring = analyze_from_structure(corrected, object(), "知識")
+        self.assertEqual(scoring["status"], "held")
+        self.assertIn("廊下の位置は人手確認済み", scoring["hold_reasons"][0])
+        self.assertNotIn("位置は概略", scoring["hold_reasons"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -75,6 +75,8 @@ class OllamaClient:
             },
             "keep_alive": "10m",
         }
+        if config.get("max_output_tokens"):
+            payload["options"]["num_predict"] = int(config["max_output_tokens"])
         if config.get("response_json_schema"):
             payload["format"] = config["response_json_schema"]
         elif config.get("response_mime_type") == "application/json":

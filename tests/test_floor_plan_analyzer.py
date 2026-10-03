@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from floor_plan import (
     PIPELINE_CACHE_VERSION,
@@ -26,9 +27,10 @@ from floor_plan import (
 from floor_plan.analyzer import (
     TOPOLOGY_OBSERVATION_SCHEMA, _parse_or_repair_json_object,
     add_verified_topology, discard_invalid_observations, extract_floor_plan_structure, normalize_plan_regions,
-    _valid_cropped_inventory,
-    _valid_hall_probe,
+    _recheck_empty_features, _valid_cropped_inventory, build_feature_prompt, CROPPED_INVENTORY_SCHEMA,
+    _valid_hall_probe, sanitize_visual_features,
 )
+from floor_plan.providers import OllamaClient
 
 
 VALID_STRUCTURE = {
@@ -178,9 +180,9 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
                               "bbox": [0.2, 0.2, 0.8, 0.8], "confidence": "high"}]}
         local2 = {"spaces": [{"id": "S1", "label": "LDK", "space_type": "room",
                               "bbox": [0.2, 0.2, 0.8, 0.8], "confidence": "high"}]}
-        features1 = {"windows": [{"id": "W1", "space_id": "R1_S1", "position": [0.4, 0.5],
+        features1 = {"windows": [{"id": "W1", "space_id": "R1_S1", "position": [0.2, 0.5],
                                    "confidence": "high"}], "fixtures": [], "unreadable_items": []}
-        features2 = {"windows": [{"id": "W1", "space_id": "R2_S1", "position": [0.5, 0.5],
+        features2 = {"windows": [{"id": "W1", "space_id": "R2_S1", "position": [0.2, 0.5],
                                    "confidence": "high"}], "fixtures": [], "unreadable_items": []}
         client = FakeClient(*(json.dumps(value, ensure_ascii=False) for value in
                               (inventory, local1, local2, blank, blank, features1, features2)))
@@ -193,7 +195,7 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
         self.assertEqual(len(repeat_client.models.calls), 0)
         self.assertEqual(len(client.models.calls), 7)
         self.assertEqual([space["floor_id"] for space in extracted["spaces"]], ["1F", "2F"])
-        self.assertEqual([item["position"] for item in extracted["windows"]], [[0.2, 0.5], [0.75, 0.5]])
+        self.assertEqual([item["position"] for item in extracted["windows"]], [[0.1, 0.5], [0.6, 0.5]])
         self.assertEqual(len({item["id"] for item in extracted["windows"]}), 2)
 
     def test_scoring_stops_if_a_multi_floor_space_has_no_floor(self):
@@ -250,6 +252,128 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
                               "space_type": "room|hall|sanitary|storage|exterior|vertical_circulation|other",
                               "bbox": [0, 0, 1, 1]}]}
         self.assertFalse(_valid_cropped_inventory(copied, expected_count=7))
+
+    def test_cropped_inventory_rejects_missing_washroom_despite_valid_json(self):
+        initial = [{"label": "洋室"}, {"label": "玄関"}, {"label": "浴室"},
+                   {"label": "洗面所"}, {"label": "トイレ"}, {"label": "階段"}]
+        cropped = {"spaces": [
+            {"id": f"S{index}", "label": label, "space_type": space_type,
+             "bbox": [0.1, 0.1, 0.3, 0.3], "confidence": "high"}
+            for index, (label, space_type) in enumerate(
+                [("洋室", "room"), ("玄関", "hall"), ("浴室", "sanitary"),
+                 ("トイレ", "sanitary"), ("階段", "vertical_circulation")], 1
+            )
+        ]}
+        self.assertFalse(_valid_cropped_inventory(cropped, 6, initial))
+        cropped["spaces"].append({"id": "S6", "label": "洗面所", "space_type": "sanitary",
+                                  "bbox": [0.3, 0.3, 0.5, 0.5], "confidence": "high"})
+        self.assertTrue(_valid_cropped_inventory(cropped, 6, initial))
+
+    def test_feature_empty_recheck_separates_fixtures_and_windows(self):
+        inventory = {"spaces": [{"id": "S1", "label": "浴室", "space_type": "sanitary",
+                                  "bbox": [0.2, 0.1, 0.6, 0.6]}]}
+        client = FakeClient(
+            json.dumps({"fixtures": [{"space_id": "S1", "fixture": "浴槽", "confidence": "high"}]}),
+            json.dumps({"windows": [{"id": "W1", "space_id": "S1", "position": [0.2, 0.2],
+                                      "confidence": "medium", "faces_exterior": True}]}),
+        )
+        features = _recheck_empty_features(inventory, object(), client, "test-model")
+        self.assertEqual(len(features["fixtures"]), 1)
+        self.assertEqual(len(features["windows"]), 1)
+        self.assertEqual(len(client.models.calls), 2)
+        self.assertEqual(client.models.calls[0]["config"]["max_output_tokens"], 768)
+        self.assertNotIn('"windows":[]', build_feature_prompt(inventory))
+        space_schema = CROPPED_INVENTORY_SCHEMA["properties"]["spaces"]["items"]["properties"]
+        self.assertEqual(space_schema["confidence"]["enum"], ["high", "medium", "low"])
+        self.assertEqual(space_schema["id"]["minLength"], 1)
+        window_only = FakeClient(json.dumps({"windows": []}))
+        _recheck_empty_features(inventory, object(), window_only, "test-model", {"windows"})
+        self.assertEqual(len(window_only.models.calls), 1)
+        self.assertIn("窓だけ", window_only.models.calls[0]["contents"][0])
+
+    def test_low_confidence_feature_cannot_count_as_detected(self):
+        inventory = {"spaces": [{"id": "S1", "label": "洋室", "space_type": "room"}]}
+        features = {"windows": [], "fixtures": [{"space_id": "S1", "fixture": "シンク",
+                                                  "confidence": "low", "evidence": "見えない"}],
+                    "unreadable_items": []}
+        cleaned = discard_invalid_observations(inventory, features)
+        self.assertEqual(cleaned["fixtures"], [])
+        self.assertTrue(any("低確信度" in value for value in cleaned["unreadable_items"]))
+
+    def test_cached_visual_features_reject_interior_windows_and_wrong_room_fixtures(self):
+        structure = json.loads(json.dumps(VALID_STRUCTURE))
+        structure["spaces"][0].update(label="洋室", space_type="room", bbox=[0.1, 0.1, 0.5, 0.5])
+        structure["spaces"][1].update(label="トイレ", space_type="sanitary")
+        structure["windows"] = [
+            {"id": "W1", "space_id": "S1", "position": [0.3, 0.3], "confidence": "high"},
+            {"id": "W2", "space_id": "S1", "position": [0.1, 0.3], "confidence": "high"},
+        ]
+        structure["fixtures"] = [
+            {"space_id": "S1", "fixture": "コンロ", "confidence": "high"},
+            {"space_id": "S2", "fixture": "浴槽", "confidence": "high"},
+            {"space_id": "S2", "fixture": "便器", "confidence": "high"},
+        ]
+        checked = sanitize_visual_features(structure)
+        self.assertEqual([item["id"] for item in checked["windows"]], ["W2"])
+        self.assertEqual([item["fixture"] for item in checked["fixtures"]], ["便器"])
+        self.assertEqual(len(structure["windows"]), 2)
+
+    def test_repair_retries_failed_floor_but_keeps_valid_other_floor(self):
+        class FakeImage:
+            size = (100, 100)
+
+            def crop(self, box):
+                return self
+
+        inventory = {
+            "image_quality": {"level": "medium", "notes": []},
+            "orientation": {"value": None},
+            "plan_regions": [{"floor_id": "1F", "bbox": [0, 0, 0.5, 1]},
+                             {"floor_id": "2F", "bbox": [0.5, 0, 1, 1]}],
+            "spaces": [
+                {"id": "S1", "label": "洋室", "space_type": "room", "floor_id": "1F", "bbox": [0.1, 0.1, 0.4, 0.5]},
+                {"id": "S2", "label": "玄関", "space_type": "hall", "floor_id": "1F", "bbox": [0.1, 0.5, 0.4, 0.9]},
+                {"id": "S3", "label": "LDK", "space_type": "room", "floor_id": "2F", "bbox": [0.6, 0.1, 0.9, 0.9]},
+            ],
+        }
+        blank = {"openings": [], "connections": [], "windows": [], "fixtures": [],
+                 "negative_observations": [], "unreadable_items": []}
+        stages = {
+            "inventory": inventory, "fallback_1": {"reason": "old failure"},
+            "region_inventory_2": {"spaces": [{"id": "S1", "label": "LDK", "space_type": "room",
+                                               "bbox": [0.2, 0.1, 0.8, 0.9]}]},
+            "topology_1": blank, "topology_2": blank,
+            "features_1": {"windows": [], "fixtures": [], "unreadable_items": []},
+            "features_2": {"windows": [{"id": "W2", "space_id": "R2_S1", "position": [0.2, 0.5],
+                                        "confidence": "high"}],
+                           "fixtures": [{"space_id": "R2_S1", "fixture": "シンク",
+                                                        "confidence": "high"}], "unreadable_items": []},
+        }
+        repaired_floor = {"spaces": [
+            {"id": "S1", "label": "洋室", "space_type": "room", "bbox": [0.2, 0.1, 0.8, 0.5],
+             "confidence": "high"},
+            {"id": "S2", "label": "玄関", "space_type": "hall", "bbox": [0.2, 0.5, 0.8, 0.9],
+             "confidence": "high"},
+        ]}
+        repaired_features = {
+            "windows": [{"id": "W1", "space_id": "R1_S1", "position": [0.2, 0.3], "confidence": "high"}],
+            "fixtures": [{"space_id": "R1_S2", "fixture": "玄関収納", "confidence": "high"}],
+            "unreadable_items": [],
+        }
+        client = FakeClient(json.dumps(repaired_floor, ensure_ascii=False), json.dumps(blank),
+                            json.dumps(repaired_features, ensure_ascii=False))
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "stages.json"
+            checkpoint.write_text(json.dumps({"pipeline_version": PIPELINE_CACHE_VERSION, "stages": stages}),
+                                  encoding="utf-8")
+            extracted = extract_floor_plan_structure(
+                FakeImage(), client, "test-model", checkpoint_path=checkpoint, retry_incomplete_stages=True,
+            )
+            saved = json.loads(checkpoint.read_text(encoding="utf-8"))["stages"]
+        self.assertEqual(extracted["floor_reading_fallbacks"], [])
+        self.assertNotIn("fallback_1", saved)
+        self.assertEqual(len(client.models.calls), 3)
+        self.assertEqual([space["id"] for space in extracted["spaces"]], ["R1_S1", "R1_S2", "R2_S1"])
 
     def test_failed_floor_inventory_recovers_hall_from_checkpoint(self):
         class FakeImage:
@@ -487,6 +611,24 @@ class FloorPlanAnalyzerBacktest(unittest.TestCase):
     def test_ollama_timeout_is_configurable(self):
         client = create_analysis_client("ollama", ollama_timeout=1800)
         self.assertEqual(client.timeout, 1800)
+
+    def test_ollama_feature_recheck_limits_generated_tokens(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"message":{"content":"{}"}}'
+
+        with patch("floor_plan.providers.urlopen", return_value=FakeResponse()) as request_mock:
+            OllamaClient().generate_content(
+                model="test-model", contents=["prompt"], config={"max_output_tokens": 768},
+            )
+        payload = json.loads(request_mock.call_args.args[0].data)
+        self.assertEqual(payload["options"]["num_predict"], 768)
 
     def test_malformed_topology_json_is_repaired_once(self):
         repaired = {

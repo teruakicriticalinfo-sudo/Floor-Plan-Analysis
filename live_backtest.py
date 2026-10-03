@@ -23,6 +23,7 @@ from floor_plan import (
     load_structure_cache,
     save_structure_cache,
     structure_cache_key,
+    sanitize_visual_features,
 )
 from floor_plan.corrections import apply_reviewed_corrections
 
@@ -84,7 +85,7 @@ def main() -> int:
     )
     parser.add_argument("--no-cache", action="store_true", help="キャッシュを読み書きしない")
     parser.add_argument("--refresh-cache", action="store_true", help="画像認識をやり直してキャッシュを更新する")
-    parser.add_argument("--repair-fallbacks", action="store_true", help="階別読取に失敗した画像だけ、途中結果を使って廊下を再確認する")
+    parser.add_argument("--repair-fallbacks", action="store_true", help="階別読取の失敗や窓・設備の空結果を、途中保存から再試行する")
     parser.add_argument("--corrections-dir", type=Path, help="承認済みの画像別補正JSONを置いたフォルダ")
     parser.add_argument("--preview-draft-corrections", action="store_true", help="未承認補正を採点保留の試算として適用する")
     args = parser.parse_args()
@@ -143,10 +144,16 @@ def main() -> int:
             key = structure_cache_key(image_path.read_bytes(), provider, model, ollama_num_ctx, ollama_max_images)
             cache_path = cache_dir / f"{key}.json"
             cached = None if args.no_cache or args.refresh_cache else load_structure_cache(cache_path)
-            pending_floors = set(cached[0].get("floor_reading_fallbacks", [])) - set(
-                cached[0].get("floor_repair_attempts", [])
-            ) - set(cached[0].get("floor_hall_recoveries", [])) if cached else set()
-            repairing = bool(args.repair_fallbacks and pending_floors)
+            checked_vision = sanitize_visual_features(cached[1]) if cached else None
+            incomplete_vision = bool(checked_vision and (
+                checked_vision.get("floor_reading_fallbacks")
+                or (
+                    checked_vision.get("image_quality", {}).get("level") == "high"
+                    and len(checked_vision.get("spaces", [])) >= 3
+                    and (not checked_vision.get("windows") or not checked_vision.get("fixtures"))
+                )
+            ))
+            repairing = bool(args.repair_fallbacks and incomplete_vision)
             if repairing:
                 print("CACHE REPAIR: 階別読取の失敗箇所を途中結果から再確認")
                 cached = None
@@ -164,6 +171,7 @@ def main() -> int:
                     progress=lambda message: print(message, flush=True),
                     checkpoint_path=None if args.no_cache else cache_path.with_suffix(".stages.json"),
                     resume_checkpoint=not args.refresh_cache,
+                    retry_incomplete_stages=repairing,
                 )
                 cache_status = "disabled" if args.no_cache else "repair" if repairing else "miss"
                 if not args.no_cache:
