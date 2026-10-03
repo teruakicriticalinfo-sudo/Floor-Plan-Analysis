@@ -2,7 +2,10 @@
   "image": "sample1.webp",
   "review_status": "draft",
   "source": "assistant_visual_draft",
-  "notes": "W1〜W5は作業者の目視候補で未承認。M1〜M15は利用者のブラウザーコメントを元画像座標へ概算変換した別系列の印。M1〜M12は窓、M13〜M14はベランダに出る扉、M15は車庫に出られる窓扉と利用者が分類した。位置の数ピクセルのずれとW1〜W5の正否は未確認。採点・正解データには未反映。",
+  "notes": "利用者はW1〜W5が窓と確認。M1〜M12は窓、M13〜M14はベランダに出る扉、M15は車庫に出られる窓扉という利用者コメント。Mの位置は画面上の印から元画像へ変換後、近傍の壁線・開口線の中心へ作業者が補間した。全窓の網羅性・重複は未確認のため、全体を正解データとしては承認しない。外部扉を通常窓に混入させない。",
+  "classification_review_status": "user_confirmed",
+  "coverage_review_status": "not_confirmed",
+  "geometry_review_status": "assistant_interpolated_from_user_markers",
   "windows": [
     {"id": "W1", "floor_id": "1F", "room": "洋室", "position": [0.361, 0.109], "description": "洋室の上側外壁にある短い横線"},
     {"id": "W2", "floor_id": "1F", "room": "洋室", "position": [0.453, 0.181], "description": "洋室の右側外壁にある短い縦線"},
@@ -11,22 +14,22 @@
     {"id": "W5", "floor_id": "2F", "room": "主寝室", "position": [0.782, 0.732], "description": "主寝室の下側外壁にある短い横線"}
   ],
   "user_markers": [
-    {"id": "M1", "comment": 1, "kind": "window", "position": [0.459, 0.304]},
-    {"id": "M2", "comment": 2, "kind": "window", "position": [0.458, 0.235]},
-    {"id": "M3", "comment": 3, "kind": "window", "position": [0.460, 0.363]},
-    {"id": "M4", "comment": 4, "kind": "window", "position": [0.237, 0.270]},
-    {"id": "M5", "comment": 5, "kind": "window", "position": [0.946, 0.196]},
-    {"id": "M6", "comment": 6, "kind": "window", "position": [0.944, 0.305]},
-    {"id": "M7", "comment": 7, "kind": "window", "position": [0.945, 0.385]},
-    {"id": "M8", "comment": 8, "kind": "window", "position": [0.875, 0.591]},
-    {"id": "M9", "comment": 9, "kind": "window", "position": [0.165, 0.763]},
-    {"id": "M10", "comment": 10, "kind": "window", "position": [0.247, 0.759]},
-    {"id": "M11", "comment": 11, "kind": "window", "position": [0.639, 0.445]},
-    {"id": "M12", "comment": 12, "kind": "window", "position": [0.676, 0.324]},
-    {"id": "M13", "comment": 13, "kind": "balcony_door", "position": [0.793, 0.096]},
-    {"id": "M14", "comment": 14, "kind": "balcony_door", "position": [0.883, 0.096]},
-    {"id": "M15", "comment": 15, "kind": "garage_window_door", "position": [0.440, 0.480]}
+    {"id": "M1", "comment": 1, "kind": "window", "original_position": [0.459, 0.304], "position": [0.45411, 0.30369]},
+    {"id": "M2", "comment": 2, "kind": "window", "original_position": [0.458, 0.235], "position": [0.45411, 0.23427]},
+    {"id": "M3", "comment": 3, "kind": "window", "original_position": [0.460, 0.363], "position": [0.45411, 0.36226]},
+    {"id": "M4", "comment": 4, "kind": "window", "original_position": [0.237, 0.270], "position": [0.23259, 0.26898]},
+    {"id": "M5", "comment": 5, "kind": "window", "original_position": [0.946, 0.196], "position": [0.94304, 0.19523]},
+    {"id": "M6", "comment": 6, "kind": "window", "original_position": [0.944, 0.305], "position": [0.94304, 0.30586]},
+    {"id": "M7", "comment": 7, "kind": "window", "original_position": [0.945, 0.385], "position": [0.94304, 0.38395]},
+    {"id": "M8", "comment": 8, "kind": "window", "original_position": [0.875, 0.591], "position": [0.87342, 0.59219]},
+    {"id": "M9", "comment": 9, "kind": "window", "original_position": [0.165, 0.763], "position": [0.16456, 0.77440]},
+    {"id": "M10", "comment": 10, "kind": "window", "original_position": [0.247, 0.759], "position": [0.24684, 0.77440]},
+    {"id": "M11", "comment": 11, "kind": "window", "original_position": [0.639, 0.445], "position": [0.63766, 0.44469]},
+    {"id": "M12", "comment": 12, "kind": "window", "original_position": [0.676, 0.324], "position": [0.67405, 0.32321]},
+    {"id": "M13", "comment": 13, "kind": "balcony_door", "original_position": [0.793, 0.096], "position": [0.79272, 0.10629]},
+    {"id": "M14", "comment": 14, "kind": "balcony_door", "original_position": [0.883, 0.096], "position": [0.88291, 0.10629]},
+    {"id": "M15", "comment": 15, "kind": "garage_window_door", "original_position": [0.440, 0.480], "position": [0.43987, 0.48807]}
   ],
-  "user_marker_position_source": "browser_comment_viewport_to_original_image_estimate",
-  "user_marker_position_review_status": "approximate"
+  "user_marker_position_source": "browser_comment_viewport_to_original_image_then_nearest_wall_center",
+  "user_marker_position_review_status": "interpolated_by_assistant"
 }

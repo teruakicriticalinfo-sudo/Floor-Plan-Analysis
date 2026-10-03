@@ -21,8 +21,12 @@ class WindowReviewTests(unittest.TestCase):
             ]}, image_path)
             self.assertIn('cx="50.0" cy="20.0"', document)
             self.assertIn("&lt;上側&gt;", document)
-            self.assertIn("未承認", document)
+            self.assertIn("未確認", document)
             self.assertIn("ベランダに出る扉", document)
+            confirmed = render({"image": "sample.webp", "review_status": "draft",
+                                "classification_review_status": "user_confirmed",
+                                "windows": [{"id": "W1", "position": [0.5, 0.25]}]}, image_path)
+            self.assertIn('fill="#16803c"', confirmed)
 
     def test_rejects_invalid_or_duplicate_points(self):
         with tempfile.TemporaryDirectory() as directory:

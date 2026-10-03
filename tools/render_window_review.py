@@ -42,8 +42,11 @@ def render(annotation: dict, image_path: Path) -> str:
     for item in annotation.get("windows", []):
         ident, point = _check_point(item, seen)
         x, y = point[0] * width, point[1] * height
-        marks.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="#f59e0b" fill-opacity=".45" stroke="#a33b00" stroke-width="2"/>')
-        marks.append(f'<text x="{x+9:.1f}" y="{y-9:.1f}" fill="#9a3100" font-size="15" font-weight="bold">{html.escape(str(ident))}</text>')
+        confirmed = annotation.get("classification_review_status") == "user_confirmed"
+        color = "#16803c" if confirmed else "#f59e0b"
+        text_color = "#086328" if confirmed else "#9a3100"
+        marks.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="{color}" fill-opacity=".45" stroke="{text_color}" stroke-width="2"/>')
+        marks.append(f'<text x="{x+9:.1f}" y="{y-9:.1f}" fill="{text_color}" font-size="15" font-weight="bold">{html.escape(str(ident))}</text>')
         candidate_rows.append("<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
             ident, item.get("floor_id", ""), item.get("room", ""), item.get("description", ""),
         )) + "</tr>")
@@ -64,15 +67,16 @@ def render(annotation: dict, image_path: Path) -> str:
             ".plan{position:relative;max-width:100%}.plan img{width:100%;display:block}.plan svg{position:absolute;inset:0;width:100%;height:100%}"
             "table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #bbb;padding:7px;text-align:left}</style>"
             "<h1>sample1 窓・外部扉の確認</h1>"
-            "<p>橙のW1〜W5は作業者の目視による未承認候補です。青のM1〜M12は利用者が窓とコメントした位置、"
-            "紫のM13〜M15は利用者が外部へ出る扉とコメントした位置です。利用者コメントの座標は画面上の印から概算変換したため、"
-            "数ピクセルずれる可能性があります。いずれもQwenの検出結果ではありません。</p>"
+            "<p>緑のW1〜W5は利用者が窓と確認した元候補です。青のM1〜M12も利用者が窓とコメントした位置、"
+            "紫のM13〜M15は利用者が外部へ出る扉とコメントした位置です。M系列の位置は画面上の印から"
+            "元画像へ変換し、近くの壁・開口線へ補間しました。分類は確認済みですが、全窓の網羅性・重複は未確認です。"
+            "いずれもQwenの検出結果ではありません。</p>"
             f'<div class="plan"><img src="{html.escape(image_path.resolve().as_uri(), quote=True)}" alt="間取り図">'
             f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none">{"".join(marks)}</svg></div>'
-            f'<h2>作業者の未承認候補</h2><table><tr><th>番号</th><th>階</th><th>部屋</th><th>候補の説明</th></tr>{"".join(candidate_rows)}</table>'
+            f'<h2>元候補（利用者が窓と確認）</h2><table><tr><th>番号</th><th>階</th><th>部屋</th><th>位置の説明</th></tr>{"".join(candidate_rows)}</table>'
             f'<h2>利用者が付けた印</h2><table><tr><th>番号</th><th>コメント番号</th><th>利用者の分類</th></tr>{"".join(marker_rows)}</table>'
-            "<p>W1〜W5にも窓かどうかの確認が必要です。M1〜M15の位置にずれがあればお知らせください。"
-            "確認が終わるまで採点やベンチマークの正解に反映しません。</p></html>")
+            "<p>このページは分類を記録した作業下書きです。網羅性と重複を確認するまで、"
+            "採点や正式なベンチマークの正解には反映しません。</p></html>")
 
 
 def main() -> int:
