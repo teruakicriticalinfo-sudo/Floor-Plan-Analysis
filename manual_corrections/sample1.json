@@ -2,8 +2,9 @@
   "image": "sample1.webp",
   "review_status": "draft",
   "connection_review_status": "approved",
-  "geometry_review_status": "draft",
-  "notes": "利用者確認: 1階の3接続は直接通行可能、2階主寝室には図面上入口なし。bboxと開口座標は元画像からの概略推定で、まだ利用者未確認。正式適用前に位置を確認する。",
+  "bbox_review_status": "approved",
+  "opening_position_review_status": "draft",
+  "notes": "利用者確認: 1階の3接続は直接通行可能、2階主寝室には図面上入口なし。確認ページの色枠4か所は正しい。赤丸3点の開口座標は確認待ちで、正式適用は保留する。",
   "spaces": {
     "R1_HALL": {"bbox": [0.209, 0.236, 0.280, 0.664]},
     "S5": {"bbox": [0.114, 0.666, 0.209, 0.779]},

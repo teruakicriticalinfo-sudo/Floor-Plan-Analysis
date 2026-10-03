@@ -117,7 +117,7 @@ python tools/evaluate_benchmark.py --structure-dir backtest_results/floor_sample
 
 ## 位置・接続の人手補正
 
-小さな画像ではローカル8Bモデルの座標が不安定な場合があります。`manual_corrections/sample1.json` には、利用者が確認した3つの直接接続と、画像から推定した廊下・水回り・階段の位置を分けて記録しています。位置は未確認の下書きなので、通常は適用されません。次のコマンドは下書きの効果を別ファイルで試算するだけで、モデル本来の精度を示すベンチマークには含めません。
+小さな画像ではローカル8Bモデルの座標が不安定な場合があります。`manual_corrections/sample1.json` には、利用者が確認した3つの直接接続と廊下・水回り・階段の色枠を記録しています。開口位置の赤丸はまだ確認待ちなので、全体は下書きのままで通常は適用されません。次のコマンドは下書きの効果を別ファイルで試算するだけで、モデル本来の精度を示すベンチマークには含めません。
 
 `manual_corrections/sample1_review.html` をブラウザで開くと、元画像に補正候補の範囲と開口位置を重ねて確認できます。
 
@@ -131,4 +131,4 @@ python tools/apply_reviewed_corrections.py --structure backtest_results/floor_sa
 python live_backtest.py --input-dir floor_sample --results-dir backtest_results/manual_preview --image sample1.webp --corrections-dir manual_corrections --preview-draft-corrections
 ```
 
-元画像と照合してbbox・開口座標も確認できた場合にのみ、修正JSONの `geometry_review_status` と `review_status` を `approved` に変更します。未承認データは `--preview-draft` なしでは適用できず、試算結果を採点へ渡しても採点保留になります。
+元画像と照合してbbox・開口座標の両方を確認できた場合にのみ、修正JSONの `bbox_review_status`、`opening_position_review_status`、`review_status` を `approved` に変更します。旧形式の `geometry_review_status` も読み取れます。未承認データは `--preview-draft` なしでは適用できず、試算結果を採点へ渡しても採点保留になります。

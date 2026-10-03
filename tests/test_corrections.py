@@ -50,6 +50,17 @@ class CorrectionTests(unittest.TestCase):
         self.assertEqual(apply_reviewed_corrections(self.structure, approved)["manual_correction_status"], "approved")
         with self.assertRaisesRegex(ValueError, "位置の確認"):
             apply_reviewed_corrections(self.structure, {**approved, "geometry_review_status": "draft"})
+        with self.assertRaisesRegex(ValueError, "opening_position_review_status"):
+            apply_reviewed_corrections(self.structure, {
+                **approved, "bbox_review_status": "approved", "opening_position_review_status": "draft",
+            })
+        with self.assertRaisesRegex(ValueError, "bbox_review_status"):
+            apply_reviewed_corrections(self.structure, {
+                **approved, "bbox_review_status": "draft", "opening_position_review_status": "approved",
+            })
+        self.assertEqual(apply_reviewed_corrections(self.structure, {
+            **approved, "bbox_review_status": "approved", "opening_position_review_status": "approved",
+        })["manual_correction_status"], "approved")
         bad = {**approved, "spaces": {"hall": {"bbox": [0.4, 0.1, 0.25, 0.8]}}}
         with self.assertRaisesRegex(ValueError, "bbox"):
             apply_reviewed_corrections(self.structure, bad)

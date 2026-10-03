@@ -14,11 +14,16 @@ def apply_reviewed_corrections(
     status = corrections.get("review_status")
     if status != "approved" and not (allow_draft and status == "draft"):
         raise ValueError("修正データが未承認です。利用者確認後にreview_statusをapprovedにしてください。")
-    if status == "approved" and any(
-        corrections.get(key, "approved") != "approved"
-        for key in ("connection_review_status", "geometry_review_status")
-    ):
-        raise ValueError("接続または位置の確認が未完了です。connection_review_statusとgeometry_review_statusをapprovedにしてください。")
+    if status == "approved":
+        legacy_geometry_status = corrections.get("geometry_review_status", "approved")
+        review_states = {
+            "connection_review_status": corrections.get("connection_review_status", "approved"),
+            "bbox_review_status": corrections.get("bbox_review_status", legacy_geometry_status),
+            "opening_position_review_status": corrections.get("opening_position_review_status", legacy_geometry_status),
+        }
+        pending = [key for key, value in review_states.items() if value != "approved"]
+        if pending:
+            raise ValueError(f"接続または位置の確認が未完了です: {', '.join(pending)}")
 
     result = deepcopy(structure)
     spaces = {space["id"]: space for space in result["spaces"]}
