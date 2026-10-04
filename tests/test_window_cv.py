@@ -52,6 +52,17 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertEqual(len(report["covered_exterior_door_ids"]), 1)
         self.assertEqual(len(report["missed_exterior_door_ids"]), 1)
 
+    def test_passable_window_door_counts_as_window_like_reference(self):
+        candidates = [{"id": "C001", "bbox": [0.2, 0.2, 0.23, 0.3]}]
+        annotation = {"classification_review_status": "user_confirmed",
+                      "reference_rectangles": [
+                          {"id": "R1", "kind": "window_door", "bbox": [0.19, 0.2, 0.24, 0.3]}]}
+        report = evaluate_candidate_coverage(candidates, annotation, (100, 100))
+        self.assertEqual(report["marked_window_rectangles"], 1)
+        self.assertEqual(report["marked_window_door_rectangles"], 1)
+        self.assertEqual(report["covered_marked_windows"], 1)
+        self.assertEqual(report["marked_exterior_door_rectangles"], 0)
+
     def test_other_image_reports_marked_coverage_without_claiming_full_recall(self):
         annotation = {"image": "sample2.webp", "classification_review_status": "user_confirmed",
                       "reference_rectangles": [
@@ -92,7 +103,7 @@ class WallGapDetectionTests(unittest.TestCase):
                                 {"candidate_id": "C002", "bbox": candidates[1]["bbox"],
                                  "orientation": "vertical", "classification": "exterior_door"}]}
         migrated = migrate_review(review, candidates, "sample.webp", image_bytes)
-        self.assertEqual(migrated["schema_version"], 2)
+        self.assertEqual(migrated["schema_version"], 3)
         self.assertEqual(migrated["review_status"], "draft")
         self.assertEqual([item["classification"] for item in migrated["decisions"]],
                          ["window", "door_unclassified"])
@@ -103,6 +114,9 @@ class WallGapDetectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             migrate_review(review, candidates, "sample.webp", image_bytes,
                            detector_version=SYMBOL_DETECTOR_VERSION)
+        review["schema_version"] = 2
+        self.assertEqual(migrate_review(review, candidates, "sample.webp", image_bytes)
+                         ["schema_version"], 3)
 
     def test_review_page_exports_decisions_and_hides_reference_by_default(self):
         image = Image.new("RGB", (30, 30), "white")
@@ -121,6 +135,7 @@ class WallGapDetectionTests(unittest.TestCase):
             page = path.read_text(encoding="utf-8")
         self.assertIn('id="reference-layer" style="display:none"', page)
         self.assertIn('value="window"', page)
+        self.assertIn('value="window_door"', page)
         self.assertIn('value="exterior_door"', page)
         self.assertIn('value="interior_door"', page)
         self.assertIn('value="door_unclassified"', page)
@@ -129,7 +144,7 @@ class WallGapDetectionTests(unittest.TestCase):
         self.assertIn("image_sha256", page)
         self.assertIn("review_status", page)
         self.assertIn("data.schema_version===1", page)
-        self.assertIn("指定された窓枠への位置一致", page)
+        self.assertIn("指定された窓・窓扉枠への位置一致", page)
         self.assertNotIn("sample1での開発中", page)
 
     def test_symbol_review_page_has_distinct_detector_version(self):

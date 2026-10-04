@@ -19,7 +19,7 @@ from floor_plan.window_symbols import SYMBOL_DETECTOR_VERSION, detect_window_sym
 
 
 ROOT = Path(__file__).resolve().parent
-REVIEW_SCHEMA_VERSION = 2
+REVIEW_SCHEMA_VERSION = 3
 
 
 def _distance_to_box(point: tuple[float, float], box: list[float], size: tuple[int, int]) -> float:
@@ -38,7 +38,7 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
     if tolerance_px <= 0:
         raise ValueError("照合許容距離が不正です")
     references = annotation.get("reference_rectangles") or []
-    windows = [item for item in references if item.get("kind") == "window"]
+    windows = [item for item in references if item.get("kind") in {"window", "window_door"}]
     doors = [item for item in references if item.get("kind") in {"balcony_door", "garage_window_door"}]
     edges = []
     for candidate_index, candidate in enumerate(candidates):
@@ -93,6 +93,7 @@ def evaluate_candidate_coverage(candidates: list[dict], annotation: dict,
     return {"detector_version": detector_version,
             "candidate_count": len(candidates),
             "marked_window_rectangles": len(windows),
+            "marked_window_door_rectangles": sum(item.get("kind") == "window_door" for item in windows),
             "covered_marked_windows": len(matches),
             "marked_window_coverage": round(len(matches) / len(windows), 3) if windows else None,
             "window_reference_complete": reference_complete,
@@ -112,7 +113,7 @@ def migrate_review(review: dict, candidates: list[dict], image_name: str,
                    image_bytes: bytes, detector_version: str = DETECTOR_VERSION) -> dict:
     """Validate a downloaded review and make legacy generic doors unresolved."""
     version = review.get("schema_version")
-    if version not in {1, REVIEW_SCHEMA_VERSION}:
+    if version not in {1, 2, REVIEW_SCHEMA_VERSION}:
         raise ValueError("確認JSONの形式が不正です")
     if (review.get("image") != image_name
             or review.get("image_sha256") != hashlib.sha256(image_bytes).hexdigest()
@@ -124,7 +125,7 @@ def migrate_review(review: dict, candidates: list[dict], image_name: str,
     by_id = {item["id"]: item for item in candidates}
     normalized = []
     seen = set()
-    allowed = {"unreviewed", "window", "interior_door", "exterior_door",
+    allowed = {"unreviewed", "window", "window_door", "interior_door", "exterior_door",
                "door_unclassified", "not_opening", "uncertain"}
     for decision in source_decisions:
         ident = decision.get("candidate_id")
@@ -182,6 +183,7 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
             f'<select aria-label="{ident} の判定" data-id="{ident}">'
             '<option value="unreviewed">未判定</option>'
             '<option value="window">窓</option>'
+            '<option value="window_door">通行できる窓扉</option>'
             '<option value="interior_door">室内扉</option>'
             '<option value="exterior_door">外部扉</option>'
             '<option value="door_unclassified">扉（内外未分類）</option>'
@@ -192,7 +194,8 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
     for reference in annotation.get("reference_rectangles", []):
         box = reference["bbox"]
         x1, y1, x2, y2 = box[0] * width, box[1] * height, box[2] * width, box[3] * height
-        color = "#dc2626" if reference["kind"] == "window" else "#7c3aed"
+        color = ("#dc2626" if reference["kind"] == "window" else
+                 "#d97706" if reference["kind"] == "window_door" else "#7c3aed")
         reference_shapes.append(
             f'<rect x="{x1:.1f}" y="{y1:.1f}" width="{x2-x1:.1f}" height="{y2-y1:.1f}" '
             f'fill="none" stroke="{color}" stroke-width="1.5"/>')
@@ -209,7 +212,8 @@ def render_review_page(image_bytes: bytes, image_name: str, image_size: tuple[in
     symbol_tuning_image = detector_version == SYMBOL_DETECTOR_VERSION and image_name == "sample2.webp"
     reference_complete = (annotation.get("review_status") == "approved"
                           and annotation.get("coverage_review_status") == "user_confirmed_no_missing_windows")
-    coverage_label = "開発用赤枠の位置一致" if development_image else "指定された窓枠への位置一致"
+    coverage_label = ("開発用赤枠の位置一致" if development_image else
+                      "指定された窓・窓扉枠への位置一致")
     coverage_note = ("位置一致はsample1での開発中の値です。窓の自動認定や独立した精度評価ではありません。"
                      if development_image else
                      "位置一致はsample2で平行線条件を調整した後の値です。独立した精度評価ではありません。"
@@ -235,6 +239,7 @@ main{{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:18p
 .candidate .hitbox{{fill:transparent;cursor:pointer}}
 .candidate text{{font-size:7px;font-weight:700;fill:#004a80;pointer-events:none;paint-order:stroke;stroke:white;stroke-width:2px}}
 .candidate[data-status="window"] .outline{{stroke:#159447;stroke-width:2.3}}
+.candidate[data-status="window_door"] .outline{{stroke:#d97706;stroke-width:2.3}}
 .candidate[data-status="exterior_door"] .outline{{stroke:#bd6b00;stroke-width:2.3}}
 .candidate[data-status="interior_door"] .outline{{stroke:#0f766e;stroke-width:2.3}}
 .candidate[data-status="door_unclassified"] .outline{{stroke:#eab308;stroke-width:2.3}}
@@ -253,7 +258,7 @@ select,button{{font:inherit;padding:4px 6px}}button{{cursor:pointer}}
 <p>{detector_note}窓とは限りません。候補をクリックし、室内扉と外部扉も分けて分類してください。</p>
 <p class="small">このページは採点を変更しません。判定はブラウザ内に一時保存され、「確認結果JSONを保存」で書き出せます。</p></header>
 <main><section class="panel"><div class="controls">
-<label><input id="show-reference" type="checkbox"> 元の赤枠を表示（赤＝窓、紫＝外部扉）</label>
+<label><input id="show-reference" type="checkbox"> 元の赤枠を表示（赤＝窓、橙＝窓扉、紫＝外部扉）</label>
 <span>候補 {len(candidates)}件 / {coverage_label} {coverage_text}</span>
 </div><div class="plan"><img src="data:{image_mime};base64,{encoded_image}" alt="間取り図">
 <svg viewBox="0 0 {width} {height}" preserveAspectRatio="none">
@@ -267,9 +272,9 @@ select,button{{font:inherit;padding:4px 6px}}button{{cursor:pointer}}
 <div class="review-list">{''.join(rows)}</div></aside></main>
 <script>
 const meta = {script_data};
-const valid = new Set(['unreviewed','window','interior_door','exterior_door','door_unclassified','not_opening','uncertain']);
+const valid = new Set(['unreviewed','window','window_door','interior_door','exterior_door','door_unclassified','not_opening','uncertain']);
 const unresolved = new Set(['unreviewed','door_unclassified']);
-const storageKey = `window-cv-review-v2:${{meta.image_sha256}}:${{meta.detector_version}}`;
+const storageKey = `window-cv-review-v3:${{meta.image_sha256}}:${{meta.detector_version}}`;
 let decisions = {{...meta.initial_decisions}};
 try {{
   const saved = JSON.parse(localStorage.getItem(storageKey) || '{{}}');
@@ -323,7 +328,7 @@ document.getElementById('import').addEventListener('change', async event => {{
     const data=JSON.parse(await file.text());
     if(data.image_sha256!==meta.image_sha256 || data.detector_version!==meta.detector_version)
       throw new Error('画像または検出器の版が異なります');
-    if(data.schema_version!==1 && data.schema_version!=={REVIEW_SCHEMA_VERSION})
+    if(![1,2,{REVIEW_SCHEMA_VERSION}].includes(data.schema_version))
       throw new Error('確認JSONの形式が異なります');
     const allowed=new Set(meta.candidate_ids);decisions={{}};
     let legacyDoors=0;
@@ -417,7 +422,7 @@ def main() -> int:
     if evaluation["marked_window_rectangles"] is None:
         print(f"候補 {len(candidates)}件、赤枠照合なし")
     else:
-        print(f"候補 {len(candidates)}件、既知の窓赤枠への位置一致 "
+        print(f"候補 {len(candidates)}件、既知の窓・窓扉赤枠への位置一致 "
               f"{evaluation['covered_marked_windows']}/{evaluation['marked_window_rectangles']}")
     print(f"候補JSON: {candidates_path}\n照合JSON: {evaluation_path}\n確認ページ: {review_path}")
     return 0

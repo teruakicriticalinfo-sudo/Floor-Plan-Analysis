@@ -1,0 +1,192 @@
+{
+  "schema_version": 3,
+  "image": "sample2.webp",
+  "image_sha256": "3066981bb7349d0d21dea67e18073503f9bf4f4cef7af9ba4417eafa5561c9a6",
+  "detector_version": "wall-symbol-v2",
+  "review_status": "user_reviewed",
+  "decisions": [
+    {
+      "candidate_id": "C001",
+      "bbox": [
+        0.09719,
+        0.15625,
+        0.10799,
+        0.27708
+      ],
+      "orientation": "vertical",
+      "classification": "window"
+    },
+    {
+      "candidate_id": "C002",
+      "bbox": [
+        0.73866,
+        0.1625,
+        0.74946,
+        0.28125
+      ],
+      "orientation": "vertical",
+      "classification": "window"
+    },
+    {
+      "candidate_id": "C003",
+      "bbox": [
+        0.09719,
+        0.29792,
+        0.10799,
+        0.41667
+      ],
+      "orientation": "vertical",
+      "classification": "window"
+    },
+    {
+      "candidate_id": "C004",
+      "bbox": [
+        0.56587,
+        0.34375,
+        0.67819,
+        0.3625
+      ],
+      "orientation": "horizontal",
+      "classification": "window"
+    },
+    {
+      "candidate_id": "C005",
+      "bbox": [
+        0.20302,
+        0.3625,
+        0.22246,
+        0.37708
+      ],
+      "orientation": "horizontal",
+      "classification": "not_opening"
+    },
+    {
+      "candidate_id": "C006",
+      "bbox": [
+        0.52484,
+        0.41042,
+        0.53564,
+        0.44792
+      ],
+      "orientation": "vertical",
+      "classification": "window"
+    },
+    {
+      "candidate_id": "C007",
+      "bbox": [
+        0.16631,
+        0.48125,
+        0.26782,
+        0.49375
+      ],
+      "orientation": "horizontal",
+      "classification": "window"
+    },
+    {
+      "candidate_id": "C008",
+      "bbox": [
+        0.73866,
+        0.625,
+        0.74946,
+        0.74375
+      ],
+      "orientation": "vertical",
+      "classification": "window_door"
+    },
+    {
+      "candidate_id": "C009",
+      "bbox": [
+        0.55076,
+        0.66667,
+        0.56803,
+        0.7
+      ],
+      "orientation": "vertical",
+      "classification": "not_opening"
+    },
+    {
+      "candidate_id": "C010",
+      "bbox": [
+        0.26998,
+        0.8125,
+        0.31102,
+        0.82292
+      ],
+      "orientation": "horizontal",
+      "classification": "interior_door"
+    },
+    {
+      "candidate_id": "C011",
+      "bbox": [
+        0.55508,
+        0.8125,
+        0.60691,
+        0.82292
+      ],
+      "orientation": "horizontal",
+      "classification": "interior_door"
+    },
+    {
+      "candidate_id": "C012",
+      "bbox": [
+        0.09719,
+        0.8375,
+        0.12095,
+        0.90625
+      ],
+      "orientation": "vertical",
+      "classification": "window"
+    },
+    {
+      "candidate_id": "C013",
+      "bbox": [
+        0.15767,
+        0.85417,
+        0.17279,
+        0.9125
+      ],
+      "orientation": "vertical",
+      "classification": "not_opening"
+    },
+    {
+      "candidate_id": "C014",
+      "bbox": [
+        0.33477,
+        0.87083,
+        0.35205,
+        0.88125
+      ],
+      "orientation": "horizontal",
+      "classification": "not_opening"
+    },
+    {
+      "candidate_id": "C015",
+      "bbox": [
+        0.19438,
+        0.9,
+        0.21166,
+        0.91042
+      ],
+      "orientation": "horizontal",
+      "classification": "not_opening"
+    },
+    {
+      "candidate_id": "C016",
+      "bbox": [
+        0.32613,
+        0.94375,
+        0.37365,
+        0.95417
+      ],
+      "orientation": "horizontal",
+      "classification": "window"
+    }
+  ],
+  "source_review_sha256": "ecac1e5d0c0589c630306cfe7ba71f5fefb640d45b6a9352f6c0906cef53fc9c",
+  "manual_followup": {
+    "candidate_id": "C008",
+    "from": "exterior_door",
+    "to": "window_door",
+    "reason": "利用者が1階LDK―テラス境界を通行できる窓扉と確認"
+  }
+}
