@@ -138,6 +138,16 @@ python window_cv_review.py --review-file "C:\Users\teru\Downloads\sample1_window
 
 sample2の16候補は利用者が全件を確認しました。最終内訳は通常窓8件、通行できる窓扉1件、室内扉2件、非開口5件です。保存先は `manual_corrections/sample2_window_cv_review.json` です。最初の書き出しではR07に重なるC008を「外部扉」としましたが、後続確認で「通行できる窓扉」と確定したため、その修正履歴もJSONに残しています。確認JSONのスキーマv3では窓扉を独立して選べ、旧v1・v2も読み込めます。窓・窓扉9件が指定矩形に対応し、窓R08は未検出です。これは人手判定であり、自動分類の正答率ではありません。
 
+### 別画像sample3での未調整テスト
+
+`wall-symbol-v2` を変更する前にsample3へ適用し、候補5件と画像・候補JSONのハッシュを `manual_corrections/sample3_holdout_manifest.json` に固定しました。正解枠がまだないため、5件という候補数を精度とは扱いません。候補に引きずられないよう、元画像だけを表示するページで窓・通行できる窓扉を先に囲んでください。
+
+```powershell
+python manual_window_labeler.py --image floor_sample/sample3.webp
+```
+
+生成される `manual_corrections/sample3_window_label.html` で枠をドラッグして追加し、「すべての窓・窓扉を確認し、付け漏れはない」をチェックしてから「確認JSONを保存」を押します。ダウンロードした `sample3_window_reference.json` を確認用に渡してください。判別不能の枠がある場合は承認済みにできません。ページは画像を埋め込むためGitには含めず、正解JSONが承認されるまで候補との位置照合も行いません。
+
 ```powershell
 python window_cv_review.py --image floor_sample/sample2.webp --annotations manual_corrections/sample2_windows.json --detector wall-symbol-v2
 ```

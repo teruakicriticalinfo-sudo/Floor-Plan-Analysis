@@ -1,0 +1,10 @@
+{
+  "image": "sample3.webp",
+  "image_sha256": "d090c85fb400ecc0fc265b064e8d5ac972ac95fe07082f72d8df96c43e803ab5",
+  "detector_version": "wall-symbol-v2",
+  "detector_commit": "683ff226991485e448cebbb69bdce641c9758c65",
+  "candidate_count": 5,
+  "candidate_json_sha256": "6c8f60b3e58158e0abc2227062a0d0711d3028b1ef25a29e34ad9a02eef76097",
+  "reference_status": "pending_user_annotation",
+  "note": "sample3の正解窓枠を作成する前に、既存のwall-symbol-v2で候補を固定した。候補を見ずに元画像から参照枠を付け、承認後にのみ位置照合する。"
+}

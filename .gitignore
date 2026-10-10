@@ -10,3 +10,5 @@ floor_photo/*
 !floor_photo/.gitkeep
 floor_sample/*
 !floor_sample/.gitkeep
+# Generated label pages embed the sample image; keep source images out of Git.
+manual_corrections/*_window_label.html
